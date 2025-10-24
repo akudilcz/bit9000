@@ -112,21 +112,103 @@ All outputs saved to `artifacts/`:
 
 ### Project Structure
 ```
-Bit3/
-├── main.py                    # CLI entry point
-├── config.yaml                # Configuration
-├── DESIGN.md                  # Design document
-├── IMPLEMENTATION.md          # Implementation details
+bit9000/
+├── main.py                           # CLI entry point
+├── config.yaml                       # Configuration file
+├── test_config.yaml                  # Test configuration
+├── requirements.txt                  # Dependencies
+├── pyproject.toml                    # Project metadata
+├── DESIGN.md                         # Technical design document
+├── README.md                         # This file
+│
 ├── src/
+│   ├── model/
+│   │   ├── token_predictor.py       # SimpleTokenPredictor architecture
+│   │   └── trainer.py               # Training logic
+│   │
 │   ├── pipeline/
-│   │   ├── step_04_tokenize/  # Tokenization
-│   │   ├── step_05_sequences/ # Sequence creation
-│   │   ├── step_06_train/     # Training
-│   │   ├── step_07_evaluate/  # Evaluation
-│   │   └── step_08_inference/ # Inference
-│   └── model/
-│       └── token_predictor.py # Simple token predictor
-└── artifacts/                 # Pipeline outputs
+│   │   ├── base.py                  # BasePipelineBlock (abstract)
+│   │   ├── io.py                    # Artifact I/O utilities
+│   │   ├── schemas.py               # Data schemas (Pydantic)
+│   │   │
+│   │   ├── step_00_reset/
+│   │   │   └── reset_block.py       # Clear artifacts
+│   │   ├── step_01_download/
+│   │   │   ├── data_collector.py    # Fetch OHLCV data
+│   │   │   └── download_block.py    # Download pipeline step
+│   │   ├── step_02_clean/
+│   │   │   ├── clean_block.py       # Data cleaning
+│   │   │   └── data_processor.py    # Preprocessing utilities
+│   │   ├── step_03_split/
+│   │   │   └── split_block.py       # Train/val split
+│   │   ├── step_04_tokenize/
+│   │   │   └── tokenize_block.py    # Price → tokens
+│   │   ├── step_05_sequences/
+│   │   │   └── sequence_block.py    # Create rolling windows
+│   │   ├── step_06_train/
+│   │   │   └── train_block.py       # Model training
+│   │   ├── step_07_evaluate/
+│   │   │   └── evaluate_block.py    # Validation & metrics
+│   │   └── step_08_inference/
+│   │       └── inference_block.py   # Real-time prediction
+│   │
+│   ├── system/
+│   │   ├── pretrain.py              # Pretraining utilities
+│   │   ├── tune.py                  # Fine-tuning utilities
+│   │   └── README.md                # System documentation
+│   │
+│   └── utils/
+│       ├── config_validator.py      # Config validation
+│       ├── logger.py                # Logging utilities
+│       ├── metrics.py               # Performance metrics
+│       └── plot_utils.py            # Visualization utilities
+│
+├── tests/
+│   ├── conftest.py                  # Pytest fixtures & configuration
+│   │
+│   ├── model/
+│   │   └── test_token_predictor.py  # Model unit tests
+│   │
+│   ├── pipeline/
+│   │   ├── unit/                    # Unit tests
+│   │   │   ├── test_artifact_io.py
+│   │   │   ├── test_clean_block.py
+│   │   │   ├── test_download_block.py
+│   │   │   ├── test_pipeline_base.py
+│   │   │   ├── test_schemas_validation.py
+│   │   │   └── quality/
+│   │   │       └── test_clean_quality.py
+│   │   ├── clean/                   # Integration tests
+│   │   │   ├── test_clean_block.py
+│   │   │   └── test_clean_quality.py
+│   │   ├── download/
+│   │   │   └── test_download_block.py
+│   │   ├── sequences/
+│   │   │   └── test_sequence_block.py
+│   │   ├── tokenize/
+│   │   │   └── test_tokenize_block.py
+│   │   └── integration/             # End-to-end tests
+│   │       (reserved for full pipeline tests)
+│   │
+│   ├── utils/
+│   │   ├── test_logger.py
+│   │   ├── test_logger_edge_cases.py
+│   │   └── test_metrics.py
+│   │
+│   └── data/                        # Test fixtures
+│
+└── artifacts/                       # Pipeline outputs (gitignored)
+    ├── step_00_reset/
+    ├── step_01_download/
+    ├── step_02_clean/
+    ├── step_03_split/
+    ├── step_04_tokenize/           # tokens + thresholds
+    ├── step_05_sequences/          # tensor sequences
+    ├── step_06_train/              # model checkpoint
+    ├── step_07_evaluate/           # metrics & confusion matrices
+    ├── step_08_inference/          # predictions
+    ├── checkpoints/                # PyTorch Lightning checkpoints
+    └── lightning_logs/             # Training logs
 ```
 
 ### Testing
