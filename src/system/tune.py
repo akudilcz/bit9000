@@ -72,6 +72,15 @@ class HyperparameterTuner:
 
         logger.info(f"Loaded train: X={self.train_X.shape}, y={self.train_y.shape}")
         logger.info(f"Loaded val: X={self.val_X.shape}, y={self.val_y.shape}")
+        
+        # Handle both old (N, 8) and new (N,) target formats
+        # New design: single next-hour token (N,)
+        # Old design: 8-hour output (N, 8)
+        if len(self.train_y.shape) > 1 and self.train_y.shape[1] > 1:
+            logger.info(f"Detected old sequence format (N, {self.train_y.shape[1]}). Taking first token only.")
+            self.train_y = self.train_y[:, 0]  # Take first token (next hour only)
+            self.val_y = self.val_y[:, 0]
+            logger.info(f"Updated targets: train_y={self.train_y.shape}, val_y={self.val_y.shape}")
 
         # Device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
