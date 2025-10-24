@@ -299,7 +299,7 @@ class HyperparameterTuner:
             logger.info(
                 f"Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}"
             )
-            print(f"✓ Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}")
+            print(f"[DONE] Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}")
             return -best_val_accuracy  # Return negative accuracy (Optuna minimizes)
 
         except Exception as e:
