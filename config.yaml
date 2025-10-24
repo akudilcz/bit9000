@@ -57,6 +57,7 @@ model:
   num_layers: 2  # Original: 2 layers (shallower is better)
   feedforward_dim: 256  # Original
   dropout: 0.11071062737382537  # Original
+  stochastic_depth: 0.1  # NEW: Randomly skip residual connections (drop_prob per layer)
 
 # Training configuration
 training:

@@ -46,6 +46,33 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class StochasticDepth(nn.Module):
+    """Randomly skip entire residual connections during training.
+    
+    Also known as DropPath in vision transformers. This helps regularization
+    by encouraging the model not to rely too heavily on any single layer.
+    """
+    
+    def __init__(self, drop_prob: float = 0.1):
+        super().__init__()
+        self.drop_prob = drop_prob
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.drop_prob == 0:
+            return x
+        
+        # Random keep probability per batch element
+        keep_prob = 1 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = torch.bernoulli(torch.full(shape, keep_prob, device=x.device))
+        
+        # Scale by keep probability to maintain expected value
+        if keep_prob > 0:
+            x = x * random_tensor / keep_prob
+        
+        return x
+
+
 class PositionalEncoding(nn.Module):
     """Standard sinusoidal positional encoding"""
     
@@ -147,6 +174,24 @@ class SimpleTokenPredictor(nn.Module):
             dropout=self.dropout,
             batch_first=True
         )
+        
+        # Add stochastic depth to residual connections
+        stochastic_depth_prob = config['model'].get('stochastic_depth', 0.0)
+        if stochastic_depth_prob > 0:
+            # Wrap decoder layer with stochastic depth
+            original_forward = decoder_layer.forward
+            drop_path = StochasticDepth(stochastic_depth_prob)
+            
+            def forward_with_drop_path(tgt, memory, tgt_mask=None, memory_mask=None, 
+                                      tgt_key_padding_mask=None, memory_key_padding_mask=None):
+                # Original layer forward
+                x = original_forward(tgt, memory, tgt_mask, memory_mask, 
+                                   tgt_key_padding_mask, memory_key_padding_mask)
+                # Apply stochastic depth to the residual
+                return drop_path(x - tgt) + tgt if tgt.shape == x.shape else x
+            
+            decoder_layer.forward = forward_with_drop_path
+        
         self.transformer_decoder = nn.TransformerDecoder(
             decoder_layer,
             num_layers=self.num_layers
