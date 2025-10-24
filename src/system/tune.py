@@ -99,15 +99,15 @@ class HyperparameterTuner:
         # Training hyperparameters
         learning_rate = trial.suggest_float("learning_rate", 5e-6, 5e-3, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True)
-        dropout = trial.suggest_float("dropout", 0.05, 0.3)
+        dropout = trial.suggest_float("dropout", 0.0, 0.5)  # EXPANDED: 0.05 to 0.3 -> 0.0 to 0.5
         label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.1)
         max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 2.0)
-        batch_size = trial.suggest_categorical("batch_size", [64, 128, 256])
+        batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])  # EXPANDED: added 32 and 512
 
         # Architecture hyperparameters
-        embedding_dim = trial.suggest_categorical("embedding_dim", [32, 64, 128])
+        embedding_dim = trial.suggest_categorical("embedding_dim", [16, 32, 64, 128, 256])  # EXPANDED: added 16 and 256
         num_layers = trial.suggest_int("num_layers", 2, 6)
-        num_heads = trial.suggest_categorical("num_heads", [4, 8])
+        num_heads = trial.suggest_categorical("num_heads", [2, 4, 8])  # EXPANDED: added 2
         feedforward_dim = trial.suggest_categorical(
             "feedforward_dim", [256, 512, 1024]
         )
