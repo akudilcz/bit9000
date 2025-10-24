@@ -244,12 +244,22 @@ class TrainBlock(PipelineBlock):
             
             optimizer.zero_grad()
             # Forward pass with correct teacher forcing (model handles shifting)
-            logits = model(X_batch, targets=y_batch)  # (B, T, C)
+            logits = model(X_batch, targets=y_batch)  # (B, vocab_size) for single-step prediction
 
-            # Reshape for loss computation
-            B, T, C = logits.shape
-            logits_flat = logits.view(B * T, C)
-            y_flat = y_batch.view(B * T)
+            # Handle both old (B, T, C) and new (B, C) output shapes
+            if len(logits.shape) == 3:
+                # Old format: (B, T, C) - reshape for loss
+                B, T, C = logits.shape
+                logits_flat = logits.view(B * T, C)
+                y_flat = y_batch.view(B * T)
+            else:
+                # New format: (B, vocab_size) for single-step prediction
+                logits_flat = logits  # (B, vocab_size)
+                # Handle both (B,) and (B, 1) target shapes
+                if len(y_batch.shape) > 1:
+                    y_flat = y_batch.squeeze(-1)  # (B,)
+                else:
+                    y_flat = y_batch  # Already (B,)
 
             # Compute loss
             loss = criterion(logits_flat, y_flat)
@@ -259,10 +269,10 @@ class TrainBlock(PipelineBlock):
             optimizer.step()
             
             # Metrics
-            predictions = torch.argmax(logits, dim=-1)
+            predictions = torch.argmax(logits_flat, dim=-1)
             total_loss += loss.item() * X_batch.size(0)
-            total_correct += (predictions == y_batch).sum().item()
-            total_samples += y_batch.numel()
+            total_correct += (predictions == y_flat).sum().item()
+            total_samples += y_flat.numel()
         
         avg_loss = total_loss / len(data_loader.dataset)
         avg_acc = total_correct / total_samples
@@ -270,7 +280,7 @@ class TrainBlock(PipelineBlock):
         return avg_loss, avg_acc
     
     def _validate_epoch(self, model, data_loader, criterion, device):
-        """Validate for one epoch using autoregressive generation for metrics and loss"""
+        """Validate for one epoch"""
         model.eval()
         total_loss = 0
         total_correct = 0
@@ -281,26 +291,35 @@ class TrainBlock(PipelineBlock):
                 X_batch = X_batch.to(device)
                 y_batch = y_batch.to(device)
                 
-                # Autoregressive generation for predictions
-                predictions = model.generate(X_batch, max_length=self.config['sequences']['output_length'])  # (B, T)
-
-                # Compute per-step logits by rerunning decoder step-by-step to get probs
-                # For validation loss, approximate by one-hot of predictions (no leakage)
-                predictions_one_hot = torch.zeros(predictions.size(0), predictions.size(1), 3, device=device)
-                predictions_one_hot.scatter_(2, predictions.unsqueeze(-1), 1)
-
-                B, T = predictions.shape
-                pred_flat = predictions_one_hot.view(B * T, 3)
-                y_flat = y_batch.view(B * T)
-
-                loss = criterion(pred_flat, y_flat)
-
+                # Forward pass to get logits
+                logits = model(X_batch, targets=y_batch)  # (B, vocab_size) for single-step
+                
+                # Handle both old (B, T, C) and new (B, C) output shapes
+                if len(logits.shape) == 3:
+                    # Old format: (B, T, C)
+                    B, T, C = logits.shape
+                    logits_flat = logits.view(B * T, C)
+                    y_flat = y_batch.view(B * T)
+                else:
+                    # New format: (B, vocab_size) for single-step prediction
+                    logits_flat = logits  # (B, vocab_size)
+                    # Handle both (B,) and (B, 1) target shapes
+                    if len(y_batch.shape) > 1:
+                        y_flat = y_batch.squeeze(-1)  # (B,)
+                    else:
+                        y_flat = y_batch  # Already (B,)
+                
+                # Compute loss
+                loss = criterion(logits_flat, y_flat)
+                
+                # Metrics
+                predictions = torch.argmax(logits_flat, dim=-1)
                 total_loss += loss.item() * X_batch.size(0)
-                total_correct += (predictions == y_batch).sum().item()
-                total_samples += y_batch.numel()
-        
-        avg_loss = total_loss / len(data_loader.dataset)
-        avg_acc = total_correct / total_samples
-        
-        return avg_loss, avg_acc
+                total_correct += (predictions == y_flat).sum().item()
+                total_samples += y_flat.numel()
+            
+            avg_loss = total_loss / len(data_loader.dataset)
+            avg_acc = total_correct / total_samples
+            
+            return avg_loss, avg_acc
 
