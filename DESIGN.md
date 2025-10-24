@@ -98,11 +98,101 @@ Step 8: Inference
 
 ## Pipeline Steps
 
-### Step 0-3: Data Foundation (Existing)
-- **Step 0**: Reset artifacts
-- **Step 1**: Download hourly OHLCV (2020-2025, 10 coins)
-- **Step 2**: Clean data (fill gaps, remove outliers)
-- **Step 3**: Temporal split (80% train, 20% val)
+### Step 0: Reset
+
+**Purpose**: Clear all previous pipeline artifacts and start fresh
+
+**Process**:
+1. Remove all contents from `artifacts/` directory
+2. Initialize empty directory structure for each pipeline step
+3. Create reset metadata artifact
+
+**Artifacts**:
+- `reset_artifact.json`: Metadata about reset operation (timestamp, path cleared)
+
+---
+
+### Step 1: Download
+
+**Purpose**: Fetch historical OHLCV (Open, High, Low, Close, Volume) data for 10 cryptocurrencies
+
+**Input**: None (external data source: CoinGecko, Binance, or similar API)
+
+**Output**: Raw OHLCV data in parquet format
+
+**Process**:
+1. Query data API for 10 coins: BTC, ETH, BNB, XRP, SOL, DOGE, ADA, AVAX, DOT, LTC
+2. Time period: 2020-01-01 to 2025-12-31 (6 years of hourly data)
+3. For each coin, fetch: Open, High, Low, Close, Volume
+4. Handle missing data gracefully (record gaps)
+5. Validate data quality: check for NaNs, zero volumes, price ranges
+6. Save as parquet for efficient storage and loading
+
+**Artifacts**:
+- `raw_data.parquet`: Shape `[T, 50]` where T is number of hourly timestamps
+  - Columns: BTC_open, BTC_high, BTC_low, BTC_close, BTC_volume, ETH_open, ... (5 cols × 10 coins)
+- `download_artifact.json`: Metadata (coins, date range, rows downloaded, missing data %)
+- Visualizations: Price trends over time for each coin, data completeness heatmap
+
+---
+
+### Step 2: Clean
+
+**Purpose**: Fill gaps, handle outliers, and ensure data quality
+
+**Input**: Raw OHLCV data from Step 1
+
+**Output**: Cleaned OHLCV data ready for analysis
+
+**Process**:
+1. **Fill gaps**: Forward fill for short gaps (<24 hours), remove coins/periods with long gaps
+2. **Outlier detection**: Flag extreme price movements (e.g., >50% in 1 hour) - investigate or interpolate
+3. **Volume validation**: Remove zero-volume periods, flag suspicious patterns
+4. **Price validation**: Ensure High ≥ Close ≥ Low ≥ 0
+5. **Alignment**: Ensure all coins have same timestamps (reindex if needed)
+6. **Normalization**: All prices in USD, volumes in base currency units
+
+**Artifacts**:
+- `clean_data.parquet`: Same shape as raw data, but cleaned and aligned
+  - Shape: `[T', 50]` where T' ≤ T (fewer rows if long gaps removed)
+- `clean_artifact.json`: Metadata
+  - Gaps filled: % and number
+  - Outliers detected/fixed: count per coin
+  - Time range after cleaning
+  - Quality score: 0-100
+
+---
+
+### Step 3: Split
+
+**Purpose**: Temporal train/validation split to prevent data leakage
+
+**Input**: Clean OHLCV data from Step 2
+
+**Output**: Train and validation sets separated by time
+
+**Process**:
+1. Calculate split point: 80% of timestamps for training, 20% for validation
+2. Temporal split (NOT random): maintain temporal order
+   - Example: Train = 2020-2024, Val = 2024-2025
+3. Split each of the 10 coins independently (each coin gets same split point)
+4. Save as separate parquet files
+
+**Rationale for temporal split**:
+- Prevents **data leakage**: Model can't see future data during training
+- Reflects real-world deployment: model makes predictions on future unseen data
+- Avoids look-ahead bias: validation only contains data after training data
+
+**Artifacts**:
+- `train_clean.parquet`: Training set
+  - Shape: `[T_train, 50]` where T_train ≈ 0.8 × T'
+- `val_clean.parquet`: Validation set
+  - Shape: `[T_val, 50]` where T_val ≈ 0.2 × T'
+- `split_artifact.json`: Metadata
+  - Train rows: T_train, date range
+  - Val rows: T_val, date range
+  - Split ratio: 0.8 / 0.2
+  - No temporal overlap confirmed
 
 ### Step 4: Tokenization
 
