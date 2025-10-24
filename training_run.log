@@ -1,0 +1,80 @@
+
+[STEP 06] TRAIN: Training model...
+Missing 20 required config value(s):
+  - binning.lookback_hours
+  - binning.target_shift_hours
+  - binning.num_bins
+  - binning.method
+  - binning.quartiles
+  - binning.labels
+  - binning.feature_engineering_params
+  - binning.feature_engineering_params.epsilon
+  - binning.feature_engineering_params.max_ratio
+  - binning.feature_engineering_params.max_volume_ratio
+  - binning.feature_engineering_params.rsi_period
+  - binning.feature_engineering_params.rsi_min_periods
+  - binning.feature_engineering_params.rsi_default
+  - binning.feature_engineering_params.vol_window
+  - binning.feature_engineering_params.vol_min_periods
+  - binning.feature_engineering_params.momentum_4h
+  - binning.feature_engineering_params.momentum_24h
+  - model.num_target_coins
+  - model.features_per_coin
+  - model.sequence_length
+
+Please ensure all required config values are defined in config.yaml
+2025-10-24 13:48:44,496 - src.pipeline.io - INFO - ======================================================================
+2025-10-24 13:48:44,496 - src.pipeline.io - INFO - STEP 6: TRAIN - Training token predictor
+2025-10-24 13:48:44,496 - src.pipeline.io - INFO - ======================================================================
+2025-10-24 13:48:44,509 - src.pipeline.io - INFO - 
+  Device: cuda
+2025-10-24 13:48:44,509 - src.pipeline.io - INFO -   Epochs: 100
+2025-10-24 13:48:44,509 - src.pipeline.io - INFO -   Batch size: 256
+2025-10-24 13:48:44,509 - src.pipeline.io - INFO -   Learning rate: 0.00121801429078558
+2025-10-24 13:48:44,509 - src.pipeline.io - INFO -   Early stopping patience: 20
+2025-10-24 13:48:44,509 - src.pipeline.io - INFO - 
+[1/4] Loading sequences...
+2025-10-24 13:48:44,552 - src.pipeline.io - INFO -   Train: X=torch.Size([39455, 24, 10, 2]), y=torch.Size([39455, 1])
+2025-10-24 13:48:44,552 - src.pipeline.io - INFO -   Val: X=torch.Size([4295, 24, 10, 2]), y=torch.Size([4295, 1])
+2025-10-24 13:48:44,552 - src.pipeline.io - INFO -   Train batches: 155
+2025-10-24 13:48:44,552 - src.pipeline.io - INFO -   Val batches: 17
+2025-10-24 13:48:44,552 - src.pipeline.io - INFO - 
+[2/4] Initializing model...
+2025-10-24 13:48:44,561 - src.pipeline.io - INFO - Initialized SimpleTokenPredictor with 471,808 parameters
+2025-10-24 13:48:44,561 - src.pipeline.io - INFO -   Input: 24 hours Î 10 coins Î 2 channels
+2025-10-24 13:48:44,561 - src.pipeline.io - INFO -   Output: 1 hour (next hour prediction, autoregressively generated to 8 hours)
+2025-10-24 13:48:44,561 - src.pipeline.io - INFO -   Vocab: 256 bins (0-255 for continuous quantization)
+2025-10-24 13:48:44,561 - src.pipeline.io - INFO -   Model dim: 128, Heads: 4, Layers: 2
+2025-10-24 13:48:44,634 - src.pipeline.io - INFO -   Model parameters: 471,808
+2025-10-24 13:48:45,284 - src.pipeline.io - INFO - 
+[3/4] Training...
+Traceback (most recent call last):
+  File "C:\workspace\bit9000\main.py", line 565, in <module>
+    cli()
+  File "C:\Python312\Lib\site-packages\click\core.py", line 1157, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\click\core.py", line 1078, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\click\core.py", line 1688, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\click\core.py", line 1688, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\click\core.py", line 1434, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\site-packages\click\core.py", line 783, in invoke
+    return __callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\workspace\bit9000\main.py", line 259, in train
+    block.run(sequences_artifact)
+  File "C:\workspace\bit9000\src\pipeline\step_06_train\train_block.py", line 139, in run
+    train_loss, train_acc = self._train_epoch(
+                            ^^^^^^^^^^^^^^^^^^
+  File "C:\workspace\bit9000\src\pipeline\step_06_train\train_block.py", line 250, in _train_epoch
+    B, T, C = logits.shape
+    ^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
