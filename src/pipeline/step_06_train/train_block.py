@@ -242,9 +242,17 @@ class TrainBlock(PipelineBlock):
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
             
+            # Add Gaussian noise to input during training (helps escape local minima)
+            # Noise std is 0.1 * input std to avoid overwhelming the signal
+            if self.training:
+                noise = torch.randn_like(X_batch) * 0.05  # Small noise: 5% of input scale
+                X_batch_noisy = X_batch + noise
+            else:
+                X_batch_noisy = X_batch
+            
             optimizer.zero_grad()
             # Forward pass with correct teacher forcing (model handles shifting)
-            logits = model(X_batch, targets=y_batch)  # (B, vocab_size) for single-step prediction
+            logits = model(X_batch_noisy, targets=y_batch)  # (B, vocab_size) for single-step prediction
 
             # Handle both old (B, T, C) and new (B, C) output shapes
             if len(logits.shape) == 3:
