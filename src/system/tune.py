@@ -286,6 +286,10 @@ class HyperparameterTuner:
                     f"Trial {trial.number} Epoch {epoch+1}/{self.epochs_per_trial}: "
                     f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_acc={val_accuracy:.4f}"
                 )
+                print(
+                    f"Trial {trial.number} Epoch {epoch+1}/{self.epochs_per_trial}: "
+                    f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_acc={val_accuracy:.4f}"
+                )
 
                 # Early stopping
                 if epochs_without_improvement >= early_stopping_patience:
@@ -295,6 +299,7 @@ class HyperparameterTuner:
             logger.info(
                 f"Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}"
             )
+            print(f"✓ Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}")
             return -best_val_accuracy  # Return negative accuracy (Optuna minimizes)
 
         except Exception as e:
