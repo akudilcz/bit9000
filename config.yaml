@@ -70,7 +70,7 @@ training:
   num_workers: 0
   early_stopping:
     enabled: true
-    patience: 20
+    patience: 40  # INCREASED: from 20 to 40 (allow more epochs without improvement)
     min_delta: 0.0001
   warmup:
     enabled: true
