@@ -23,6 +23,8 @@ from src.pipeline.schemas import (
     ArtifactMetadata
 )
 from src.utils.config_validator import ConfigValidator
+import torch
+from src.system.tune import run_tuning
 
 
 def load_config():
@@ -174,6 +176,59 @@ def sequences():
     block = SequenceBlock(config, artifact_io)
     block.run(tokenize_artifact)
     click.echo("[OK] Sequences complete\n")
+
+
+@pipeline.command()
+@click.option('--num-trials', default=30, help='Number of trials to run')
+@click.option('--epochs-per-trial', default=20, help='Epochs per trial')
+@click.option('--timeout-hours', default=None, help='Timeout in hours (optional)')
+def tune(num_trials, epochs_per_trial, timeout_hours):
+    """Tune: Hyperparameter tuning using Optuna"""
+    click.echo("\n[TUNE] HYPERPARAMETER TUNING: Optimizing model hyperparameters...")
+    config = load_config()
+    
+    # Load sequences
+    seq_data = load_json_artifact('artifacts/step_05_sequences/sequences_artifact.json')
+    sequences_dir = Path(seq_data['train_X_path']).parent
+    
+    click.echo(f"Loading sequences from {sequences_dir}...")
+    train_X = torch.load(sequences_dir / 'train_X.pt')
+    train_y = torch.load(sequences_dir / 'train_y.pt')
+    val_X = torch.load(sequences_dir / 'val_X.pt')
+    val_y = torch.load(sequences_dir / 'val_y.pt')
+    
+    click.echo(f"  Train: X={train_X.shape}, y={train_y.shape}")
+    click.echo(f"  Val:   X={val_X.shape}, y={val_y.shape}")
+    
+    # Run tuning
+    output_dir = Path('artifacts/tuning')
+    timeout_hours_float = float(timeout_hours) if timeout_hours else None
+    
+    click.echo(f"\nStarting tuning with {num_trials} trials, {epochs_per_trial} epochs per trial...")
+    results = run_tuning(
+        config=config,
+        train_X=train_X,
+        train_y=train_y,
+        val_X=val_X,
+        val_y=val_y,
+        output_dir=output_dir,
+        num_trials=num_trials,
+        epochs_per_trial=epochs_per_trial,
+        timeout_hours=timeout_hours_float
+    )
+    
+    click.echo("\n" + "="*70)
+    click.echo("TUNING COMPLETE!")
+    click.echo("="*70)
+    click.echo(f"Best trial: {results['best_trial']}")
+    click.echo(f"Best validation loss: {results['best_val_loss']:.6f}")
+    click.echo(f"Completed trials: {results['num_completed_trials']}/{results['num_trials']}")
+    click.echo(f"Pruned trials: {results['num_pruned_trials']}")
+    click.echo(f"\nBest parameters:")
+    for param, value in results['best_params'].items():
+        click.echo(f"  {param}: {value}")
+    click.echo(f"\nResults saved to: {output_dir}")
+    click.echo("="*70 + "\n")
 
 
 @pipeline.command()
