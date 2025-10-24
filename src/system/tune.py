@@ -203,7 +203,7 @@ class HyperparameterTuner:
             # Simple training loop (no full trainer for speed)
             best_val_loss = float("inf")
             epochs_without_improvement = 0
-            early_stopping_patience = 5
+            early_stopping_patience = 10
             min_delta = 0.0001
 
             for epoch in range(self.epochs_per_trial):
