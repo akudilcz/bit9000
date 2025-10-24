@@ -1,0 +1,108 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+.conda/
+conda-meta/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-*
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache
+tests/outputs/
+coverage.xml
+
+# Data and artifacts
+data/raw/*.csv
+data/processed/*.pkl
+data/processed/*.parquet
+data/processed/*.json
+data/processed/*.jsonl
+models/*.pt
+models/*.pth
+models/*.ckpt
+models/checkpoints/
+artifacts/
+
+# PyTorch Lightning outputs
+lightning_logs/
+checkpoints/
+
+# ML/AI specific
+*.h5
+*.hdf5
+*.joblib
+*.pkl
+*.pickle
+wandb/
+mlruns/
+.neptune/
+
+# Old directories (deprecated - now consolidated in artifacts/)
+logs/
+plots/
+results/
+backtest_results/
+
+# Config files with sensitive data
+secrets.yaml
+.env
+.env.local
+.env.*.local
+
+# OS
+Thumbs.db
+.DS_Store
+*.tmp
+*.temp
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Large files that shouldn't be in git
+*.zip
+*.tar.gz
+*.rar
+*.7z

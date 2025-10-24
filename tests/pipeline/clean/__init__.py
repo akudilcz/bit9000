@@ -1,0 +1,1 @@
+"""Clean block tests"""

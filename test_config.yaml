@@ -1,0 +1,227 @@
+# ============================================================================
+# CRYPTOCURRENCY PREDICTION PIPELINE CONFIGURATION (TEST)
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# ARTIFACTS & DATA STORAGE
+# ----------------------------------------------------------------------------
+
+artifacts_base_dir: artifacts  # Base directory for all pipeline artifacts
+
+
+# ----------------------------------------------------------------------------
+# DATA COLLECTION (Step 01: Download)
+# ----------------------------------------------------------------------------
+
+data:
+  # Core data parameters
+  coins: [BTC, ETH, SOL]  # 3 coins for testing (vs 10 in production)
+  interval: 1h  # OHLCV data interval (1 hour)
+  default_start_date: 2024-01-01  # Default start date for data collection (2 months test period)
+  default_end_date: 2024-03-01  # Default end date for data collection
+  data_dir: tests/outputs/step_01_download  # Directory to store downloaded raw data
+  processed_dir: tests/outputs/step_02_clean  # Directory for processed data
+  
+  # API collection settings
+  collection:
+    batch_limit: 1000  # Maximum candles per API request
+    max_retries: 3  # Number of retries for failed requests
+    retry_delay: 5  # Seconds to wait between retries
+    request_timeout: 30  # Request timeout in seconds
+    rate_limit_delay: 0.2  # Delay between requests to respect rate limits
+    min_data_ratio: 0.95  # Minimum data completeness ratio (95%)
+    max_unchanged_threshold: 5  # Max consecutive unchanged prices before warning
+
+
+# ----------------------------------------------------------------------------
+# FEATURE ENGINEERING & TARGET BINNING (Steps 04-05)
+# ----------------------------------------------------------------------------
+
+binning:
+  # Window parameters
+  lookback_hours: 24  # Lookback window for rolling features and quartiles (1 day)
+  target_shift_hours: 1  # Prediction horizon (predict 1 hour ahead for testing)
+  
+  # Binning parameters
+  num_bins: 3  # Number of target bins (3-class classification)
+  method: quantile  # Binning method (quantile-based for balanced distribution)
+  
+  # Bin labels and thresholds (3-class price movement prediction)
+  labels:
+    0: sell   # Bottom 20% (bearish)
+    1: hold   # Middle 60% (neutral)
+    2: buy    # Top 20% (bullish)
+  
+  # Quantile thresholds for 3-bin classification
+  quartiles: [0.2, 0.8]  # 2 quartiles create 3 bins (20% sell, 60% hold, 20% buy)
+  
+  # Feature engineering parameters
+  feature_engineering_params:
+    epsilon: 1e-8  # Small value to avoid division by zero
+    max_ratio: 1e8  # Maximum ratio for clipping outliers
+    max_volume_ratio: 100.0  # Maximum volume change ratio for clipping
+    
+    # Technical indicator periods
+    rsi_period: 14  # RSI calculation period (standard)
+    rsi_min_periods: 7  # Minimum periods for RSI calculation
+    rsi_default: 50  # Default RSI value when insufficient data (neutral)
+    vol_window: 24  # Volatility calculation window (1 day)
+    vol_min_periods: 6  # Minimum 6 hours for volatility calculation
+    momentum_4h: 4  # 4-hour momentum window
+    momentum_24h: 24  # 24-hour momentum window
+    momentum_72h: 72  # 72-hour (3 day) momentum window
+
+
+# ----------------------------------------------------------------------------
+# TOKENIZATION (Step 06: Sequences)
+# ----------------------------------------------------------------------------
+
+tokenization:
+  vocab_size: 64  # Vocabulary size for feature discretization (0-63)
+  method: quantile  # Tokenization method (quantile-based binning)
+  window_size: 24  # Rolling window for quantile calculation
+  min_periods: 6  # Minimum samples needed for quantile calculation
+
+
+# ----------------------------------------------------------------------------
+# MODEL ARCHITECTURE
+# ----------------------------------------------------------------------------
+
+model:
+  type: minimal_transformer  # Model type (simplified transformer for sequences)
+  
+  # Input/output dimensions
+  num_coins: 3  # Number of cryptocurrencies
+  features_per_coin: 45  # Features per coin
+  sequence_length: 24  # Input sequence length
+  num_classes: 3  # Number of output classes (3-bin classification)
+  vocab_size: 64  # Token vocabulary size (must match tokenization.vocab_size)
+  
+  # Transformer architecture
+  embedding_dim: 32  # Token embedding dimension
+  num_heads: 2  # Number of attention heads
+  num_layers: 1  # Number of transformer layers
+  feedforward_dim: 128  # Feedforward layer dimension
+  dropout: 0.1  # Dropout rate for regularization
+  
+  # Positional encoding
+  max_len: 5000  # Maximum sequence length for positional encoding
+  pos_encoding_base: 10000.0  # Base for positional encoding calculation
+  
+  # Model persistence
+  checkpoint_dir: tests/outputs/step_08_train/checkpoints  # Directory for model checkpoints
+  best_model_path: tests/outputs/best_model.pt  # Path to save best model
+
+
+# ----------------------------------------------------------------------------
+# TRAINING (Step 07: Train)
+# ----------------------------------------------------------------------------
+
+training:
+  # Hardware settings
+  device: cpu  # Training device (cpu or cuda)
+  
+  # Training hyperparameters
+  epochs: 2  # Number of training epochs (reduced for testing)
+  batch_size: 16  # Batch size (reduced for CPU training)
+  learning_rate: 0.001  # Initial learning rate
+  weight_decay: 0.01  # L2 regularization (weight decay)
+  max_grad_norm: 0.5  # Gradient clipping threshold
+  
+  # Loss function
+  loss_type: cross_entropy  # Loss function type
+  label_smoothing: 0.0  # Label smoothing factor (0 = disabled)
+  
+  # Learning rate warmup (critical for transformer training)
+  warmup:
+    epochs: 1  # Number of warmup epochs
+    start_lr: 0.00001  # Starting learning rate (gradually increases to learning_rate)
+  
+  # Learning rate scheduler
+  scheduler:
+    type: ReduceLROnPlateau  # Scheduler type (reduce LR when validation loss plateaus)
+    patience: 5  # Epochs to wait before reducing LR
+    factor: 0.5  # Factor to reduce LR by (new_lr = lr * factor)
+    min_lr: 1.0e-06  # Minimum learning rate
+  
+  # Early stopping
+  early_stopping:
+    enabled: true  # Enable early stopping
+    patience: 10  # Epochs to wait for improvement before stopping
+    min_delta: 0.001  # Minimum change to qualify as improvement
+  
+  # Train/validation split
+  walk_forward:
+    enabled: false  # Walk-forward validation disabled (using simple train/val split)
+    val_split_hours: 120  # Hours for validation set (5 days)
+  
+  # Logging and checkpointing
+  log_interval: 10  # Log metrics every N batches
+  save_interval: 1  # Save checkpoint every N epochs
+  profile_memory: true  # Enable memory profiling
+  profile_timing: true  # Enable timing profiling
+
+
+# ----------------------------------------------------------------------------
+# LOGGING
+# ----------------------------------------------------------------------------
+
+logging:
+  level: WARNING  # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Log message format
+  file: tests/outputs/pipeline.log  # Log file path
+
+
+# ----------------------------------------------------------------------------
+# EVALUATION
+# ----------------------------------------------------------------------------
+
+evaluation:
+  results_dir: tests/outputs/step_08_evaluate
+  baseline_params:
+    momentum:
+      lookback: 24
+      thresholds:
+        sell: -0.5
+        buy: 0.5
+  oos:
+    holdout_months: 1
+  walk_forward:
+    train_window_months: 1
+    test_window_months: 1
+    step_months: 1
+
+
+# ----------------------------------------------------------------------------
+# VISUALIZATION
+# ----------------------------------------------------------------------------
+
+visualization:
+  # Output settings
+  export_dir: tests/outputs/step_11_visualize  # Directory for visualization exports
+  export_format: png  # Image format (png, jpg, svg)
+  dpi: 100  # Image resolution (dots per inch)
+  
+  # Plot styling
+  style: seaborn-v0_8-darkgrid  # Matplotlib style
+  figsize: [14, 10]  # Default figure size (width, height)
+  heatmap_figsize: [15, 10]  # Heatmap figure size
+  backtest_figsize: [14, 7]  # Backtest plot figure size
+  grid_alpha: 0.3  # Grid transparency
+  color_alpha: 0.7  # Color transparency
+  
+  # Display limits
+  max_samples: 500  # Maximum samples to display in plots
+  max_coins_display: 50  # Maximum coins to display in plots
+
+
+# ----------------------------------------------------------------------------
+# BACKTEST
+# ----------------------------------------------------------------------------
+
+backtest:
+  results_dir: tests/outputs/step_10_backtest
+  initial_capital: 10000
+  commission: 0.001
+  slippage: 0.0005
