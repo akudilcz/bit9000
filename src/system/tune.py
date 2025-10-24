@@ -14,6 +14,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+import copy
 
 import optuna
 import torch
@@ -22,11 +23,8 @@ from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.config import Config
 from src.model.token_predictor import SimpleTokenPredictor
-from src.model.trainer import Trainer
-from src.pipeline.schemas import SequencesArtifact, TuneArtifact
-from src.utils.logging_utils import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -36,8 +34,11 @@ class HyperparameterTuner:
 
     def __init__(
         self,
-        config: Config,
-        sequences_artifact: SequencesArtifact,
+        config: dict,
+        train_X: torch.Tensor,
+        train_y: torch.Tensor,
+        val_X: torch.Tensor,
+        val_y: torch.Tensor,
         output_dir: Path,
         num_trials: int = 30,
         epochs_per_trial: int = 20,
@@ -47,29 +48,27 @@ class HyperparameterTuner:
         Initialize hyperparameter tuner.
 
         Args:
-            config: Base configuration
-            sequences_artifact: Artifact from sequence creation step
+            config: Base configuration dict
+            train_X: Training input sequences (N, 24, 10, 2)
+            train_y: Training targets (N,) - single next-hour token
+            val_X: Validation input sequences
+            val_y: Validation targets
             output_dir: Directory to save tuning results
             num_trials: Number of optimization trials
             epochs_per_trial: Training epochs per trial (keep short for speed)
             timeout_hours: Optional timeout for entire tuning run
         """
         self.config = config
-        self.sequences_artifact = sequences_artifact
+        self.train_X = train_X
+        self.train_y = train_y
+        self.val_X = val_X
+        self.val_y = val_y
         self.output_dir = output_dir
         self.num_trials = num_trials
         self.epochs_per_trial = epochs_per_trial
         self.timeout_seconds = int(timeout_hours * 3600) if timeout_hours else None
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load sequences
-        logger.info("Loading sequences for tuning...")
-        sequences_dir = Path(sequences_artifact.train_X_path).parent
-        self.train_X = torch.load(sequences_dir / "train_X.pt")
-        self.train_y = torch.load(sequences_dir / "train_y.pt")
-        self.val_X = torch.load(sequences_dir / "val_X.pt")
-        self.val_y = torch.load(sequences_dir / "val_y.pt")
 
         logger.info(f"Loaded train: X={self.train_X.shape}, y={self.train_y.shape}")
         logger.info(f"Loaded val: X={self.val_X.shape}, y={self.val_y.shape}")
@@ -90,10 +89,10 @@ class HyperparameterTuner:
         """
         # Training hyperparameters
         learning_rate = trial.suggest_float("learning_rate", 5e-6, 5e-3, log=True)
-        weight_decay = trial.suggest_float("weight_decay", 0.0, 0.1)
-        dropout = trial.suggest_float("dropout", 0.05, 0.5)
-        label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2)
-        max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 5.0)
+        weight_decay = trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True)
+        dropout = trial.suggest_float("dropout", 0.05, 0.3)
+        label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.1)
+        max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 2.0)
         batch_size = trial.suggest_categorical("batch_size", [64, 128, 256])
 
         # Architecture hyperparameters
@@ -101,16 +100,18 @@ class HyperparameterTuner:
         num_layers = trial.suggest_int("num_layers", 2, 6)
         num_heads = trial.suggest_categorical("num_heads", [4, 8])
         feedforward_dim = trial.suggest_categorical(
-            "feedforward_dim", [128, 256, 512, 1024]
+            "feedforward_dim", [256, 512, 1024]
         )
 
-        # Ensure num_heads divides hidden_dim (embedding_dim * num_coins)
-        # For simplicity, we use embedding_dim directly
-        # The model will aggregate coins, so d_model = embedding_dim * 2 (price + volume fusion)
-        d_model = embedding_dim * 2  # After channel fusion
+        # Model dimension = embedding_dim * 2 (after channel fusion of price + volume)
+        d_model = embedding_dim * 4  # 2 channels * 2x scaling
 
-        # Warmup and scheduler
-        warmup_epochs = trial.suggest_int("warmup_epochs", 2, 10)
+        # Ensure d_model is divisible by num_heads
+        while d_model % num_heads != 0:
+            d_model += 1
+
+        # Warmup epochs
+        warmup_epochs = trial.suggest_int("warmup_epochs", 2, 5)
 
         return {
             "learning_rate": learning_rate,
@@ -142,21 +143,21 @@ class HyperparameterTuner:
         logger.info(f"Trial {trial.number}: Testing params {params}")
 
         try:
+            # Create a copy of config and update with trial hyperparameters
+            trial_config = copy.deepcopy(self.config)
+            trial_config['model']['embedding_dim'] = params['embedding_dim']
+            trial_config['model']['d_model'] = params['d_model']
+            trial_config['model']['num_heads'] = params['num_heads']
+            trial_config['model']['num_layers'] = params['num_layers']
+            trial_config['model']['feedforward_dim'] = params['feedforward_dim']
+            trial_config['model']['dropout'] = params['dropout']
+            trial_config['training']['learning_rate'] = params['learning_rate']
+            trial_config['training']['weight_decay'] = params['weight_decay']
+            trial_config['training']['label_smoothing'] = params['label_smoothing']
+            trial_config['training']['max_grad_norm'] = params['max_grad_norm']
+
             # Create model with sampled hyperparameters
-            model = SimpleTokenPredictor(
-                vocab_size=self.config.model.vocab_size,
-                embedding_dim=params["embedding_dim"],
-                d_model=params["d_model"],
-                num_heads=params["num_heads"],
-                num_layers=params["num_layers"],
-                feedforward_dim=params["feedforward_dim"],
-                dropout=params["dropout"],
-                input_length=self.config.sequences.input_length,
-                output_length=self.config.sequences.output_length,
-                num_coins=self.sequences_artifact.num_coins,
-                num_classes=self.config.model.num_classes,
-                num_channels=self.config.sequences.num_channels,
-            ).to(self.device)
+            model = SimpleTokenPredictor(trial_config).to(self.device)
 
             # Create data loaders
             train_dataset = TensorDataset(self.train_X, self.train_y)
@@ -199,13 +200,12 @@ class HyperparameterTuner:
                     y_batch = y_batch.to(self.device)
 
                     optimizer.zero_grad()
-                    logits = model(X_batch, targets=y_batch)  # Teacher forcing
+                    
+                    # Forward pass: model now outputs (batch, vocab_size) for single next-hour token
+                    logits = model(X_batch, targets=y_batch)  # (batch, 256)
 
-                    # Compute loss: (batch, output_length, num_classes) vs (batch, output_length)
-                    loss = criterion(
-                        logits.reshape(-1, self.config.model.num_classes),
-                        y_batch.reshape(-1),
-                    )
+                    # Compute loss
+                    loss = criterion(logits, y_batch)
 
                     loss.backward()
 
@@ -227,11 +227,8 @@ class HyperparameterTuner:
                         X_batch = X_batch.to(self.device)
                         y_batch = y_batch.to(self.device)
 
-                        logits = model(X_batch, targets=y_batch)
-                        loss = criterion(
-                            logits.reshape(-1, self.config.model.num_classes),
-                            y_batch.reshape(-1),
-                        )
+                        logits = model(X_batch, targets=y_batch)  # (batch, 256)
+                        loss = criterion(logits, y_batch)
                         val_loss += loss.item()
 
                 val_loss /= len(val_loader)
@@ -264,12 +261,12 @@ class HyperparameterTuner:
             logger.error(f"Trial {trial.number} failed with error: {e}")
             raise
 
-    def run(self) -> TuneArtifact:
+    def run(self) -> Dict[str, Any]:
         """
         Run hyperparameter tuning.
 
         Returns:
-            TuneArtifact with best parameters and tuning history
+            Dictionary with best parameters and tuning results
         """
         logger.info(f"Starting hyperparameter tuning with {self.num_trials} trials")
         logger.info(f"Each trial will train for {self.epochs_per_trial} epochs")
@@ -277,10 +274,10 @@ class HyperparameterTuner:
         # Create Optuna study
         study = optuna.create_study(
             direction="minimize",
-            sampler=TPESampler(seed=self.config.random_seed),
+            sampler=TPESampler(seed=42),
             pruner=MedianPruner(
                 n_startup_trials=5,  # Don't prune first 5 trials
-                n_warmup_steps=5,  # Wait 5 epochs before pruning
+                n_warmup_steps=3,  # Wait 3 epochs before pruning
             ),
         )
 
@@ -347,18 +344,7 @@ class HyperparameterTuner:
         # Create visualization
         self._create_visualizations(study)
 
-        # Create artifact
-        artifact = TuneArtifact(
-            best_params=best_params,
-            best_val_loss=best_value,
-            best_trial=best_trial_number,
-            num_trials=len(study.trials),
-            results_path=str(results_path),
-            trials_path=str(trials_path),
-            plots_dir=str(self.output_dir),
-        )
-
-        return artifact
+        return results
 
     def _create_visualizations(self, study: optuna.Study) -> None:
         """Create diagnostic plots for tuning results."""
@@ -409,34 +395,43 @@ class HyperparameterTuner:
             logger.info(f"Saved tuning visualizations to {self.output_dir}")
 
         except ImportError as e:
-            logger.warning(f"Could not create visualizations: {e}")
+            logger.warning(f"Could not create visualizations (missing matplotlib/seaborn): {e}")
 
 
 def run_tuning(
-    config: Config,
-    sequences_artifact: SequencesArtifact,
+    config: dict,
+    train_X: torch.Tensor,
+    train_y: torch.Tensor,
+    val_X: torch.Tensor,
+    val_y: torch.Tensor,
     output_dir: Path,
     num_trials: int = 30,
     epochs_per_trial: int = 20,
     timeout_hours: Optional[float] = None,
-) -> TuneArtifact:
+) -> Dict[str, Any]:
     """
     Run hyperparameter tuning.
 
     Args:
-        config: Configuration object
-        sequences_artifact: Artifact from sequence creation step
+        config: Configuration dict
+        train_X: Training input sequences
+        train_y: Training target tokens
+        val_X: Validation input sequences
+        val_y: Validation target tokens
         output_dir: Directory to save tuning results
         num_trials: Number of optimization trials
         epochs_per_trial: Training epochs per trial
         timeout_hours: Optional timeout for tuning
 
     Returns:
-        TuneArtifact with best parameters
+        Dictionary with tuning results and best parameters
     """
     tuner = HyperparameterTuner(
         config=config,
-        sequences_artifact=sequences_artifact,
+        train_X=train_X,
+        train_y=train_y,
+        val_X=val_X,
+        val_y=val_y,
         output_dir=output_dir,
         num_trials=num_trials,
         epochs_per_trial=epochs_per_trial,
