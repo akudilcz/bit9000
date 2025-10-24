@@ -163,7 +163,8 @@ class EvaluateBlock(PipelineBlock):
         logger.info("EVALUATION COMPLETE")
         logger.info(f"  Mean accuracy: {np.mean(per_hour_acc):.4f} ({np.mean(per_hour_acc)*100:.2f}%)")
         logger.info(f"  Hour 1 accuracy: {per_hour_acc[0]:.4f}")
-        logger.info(f"  Hour 8 accuracy: {per_hour_acc[7]:.4f}")
+        if len(per_hour_acc) > 1:
+            logger.info(f"  Hour 8 accuracy: {per_hour_acc[7]:.4f}")
         logger.info(f"  Sequence accuracy: {sequence_acc:.4f}")
         logger.info("="*70 + "\n")
         
