@@ -32,73 +32,37 @@ split:
   train_ratio: 0.8  # 80% train, 20% val
   temporal: true  # Temporal split (no shuffling)
 
-# Binning configuration (for compatibility)
-binning:
-  # Window parameters
-  lookback_hours: 24  # Lookback window for rolling features
-  target_shift_hours: 8  # Prediction horizon (8 hours ahead)
-  
-  # Binning parameters
-  num_bins: 3  # Number of target bins (3-class classification)
-  method: quantile  # Binning method (quantile-based for balanced distribution)
-  
-  # Bin labels and thresholds (3-class price movement prediction)
-  labels:
-    0: down   # Bottom 33% (bearish)
-    1: steady # Middle 33% (neutral)
-    2: up     # Top 33% (bullish)
-  
-  # Quantile thresholds for 3-bin classification
-  quartiles: [0.33, 0.67]  # 33rd and 67th percentiles
-  
-  # Feature engineering parameters
-  feature_engineering_params:
-    epsilon: 1e-8  # Small value to avoid division by zero
-    max_ratio: 1e8  # Maximum ratio for clipping outliers
-    max_volume_ratio: 100.0  # Maximum volume change ratio for clipping
-    
-    # Technical indicator periods
-    rsi_period: 14  # RSI calculation period (standard)
-    rsi_min_periods: 7  # Minimum periods for RSI calculation
-    rsi_default: 50  # Default RSI value when insufficient data (neutral)
-    vol_window: 24  # Volatility calculation window (1 day)
-    vol_min_periods: 6  # Minimum 6 hours for volatility calculation
-    momentum_4h: 4  # 4-hour momentum window
-    momentum_24h: 24  # 24-hour momentum window
-
-# Tokenization configuration
+# Tokenization configuration - UPDATED to 256 bins
 tokenization:
-  vocab_size: 3  # down=0, steady=1, up=2
-  method: quantile  # Use quantile-based thresholds
-  percentiles: [33, 67]  # 33rd and 67th percentiles for balanced classes
+  vocab_size: 256  # 256-bin quantization (0-255)
+  method: quantile  # Use quantile-based binning for uniform distribution
+  percentiles: [1, 2, 3, ..., 99]  # 255 bin edges for 256 bins
 
-# Sequence configuration
+# Sequence configuration - UPDATED to single-step output
 sequences:
-  input_length: 24  # 24 hours (1 day) of historical context - UPDATED from 48h
-  output_length: 8  # Predict next 8 hours
-  num_channels: 2  # 0=price, 1=volume - NEW
+  input_length: 24  # 24 hours (1 day) of historical context
+  output_length: 1  # Single next-hour prediction (autoregressively generated to 8 hours at inference)
+  num_channels: 2  # 0=price, 1=volume
 
 # Model configuration (Simple Token Predictor - Transformer Decoder-Only)
+# UPDATED to 256 vocab and corresponding architecture
 model:
   type: SimpleTokenPredictor
-  vocab_size: 3  # 3-token vocabulary {down, steady, up}
-  num_classes: 3  # 3-class classification
+  vocab_size: 256  # 256-bin vocabulary for continuous quantization
+  num_classes: 256  # 256-class classification
   num_coins: 10  # Number of coins (BTC, ETH, BNB, XRP, SOL, DOGE, ADA, AVAX, DOT, LTC)
-  num_target_coins: 1  # Predicting 1 coin (XRP)
-  features_per_coin: 2  # 2 features per coin (price + volume)
-  sequence_length: 24  # Same as sequences.input_length
   embedding_dim: 64  # Token embedding dimension (separate for price + volume)
-  d_model: 128  # Hidden dimension after channel fusion (embedding_dim * 2)
+  d_model: 256  # Hidden dimension after channel fusion (embedding_dim * 2 for 2 channels)
   num_heads: 4  # Number of attention heads (must divide d_model)
   num_layers: 4  # Number of transformer decoder layers
-  feedforward_dim: 256  # Feedforward dimension
+  feedforward_dim: 512  # Feedforward dimension (2x d_model)
   dropout: 0.1  # Dropout rate
 
 # Training configuration
 training:
   device: cuda
   epochs: 100
-  batch_size: 256  # As per DESIGN.md (128-256 range)
+  batch_size: 256
   learning_rate: 0.0001  # 1e-4
   weight_decay: 0.00001  # 1e-5
   label_smoothing: 0.0  # Label smoothing for calibration (0.0-0.2 range)
@@ -120,6 +84,11 @@ training:
     min_lr: 0.000001  # 1e-6 - minimum learning rate
   log_interval: 10
   save_interval: 10
+
+# Inference configuration
+inference:
+  num_steps: 8  # Generate 8 steps autoregressively
+  sampling: argmax  # or 'sample' for stochastic generation
 
 # Logging configuration
 logging:

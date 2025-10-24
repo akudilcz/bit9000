@@ -2,17 +2,18 @@
 
 Philosophy:
 - Input: 24 hours × N coins × 2 channels (price + volume tokens)
-- Output: 8 tokens (next 8 hours of XRP price), generated autoregressively
-- Vocabulary: 3 tokens {down=0, steady=1, up=2} per channel
+- Output: 1 token (next hour of XRP price), generated autoregressively for 8 hours at inference
+- Vocabulary: 256 bins {0-255} for continuous price quantization
 - Architecture: Decoder-only with causal masking (like GPT)
 - No engineered features, just raw token patterns
 
 Design:
-- Separate embeddings for price and volume channels
+- Separate embeddings for price and volume channels (256 vocab each)
 - Channel fusion to combine price and volume information
 - Coin aggregation via mean pooling
 - Causal self-attention (position i cannot see positions > i)
-- Autoregressive generation at inference time
+- Single-step prediction during training (next 1 hour)
+- Autoregressive generation at inference time (generates 8 hours by predicting 1 at a time)
 - Teacher forcing during training
 """
 
@@ -59,17 +60,18 @@ class SimpleTokenPredictor(nn.Module):
     Autoregressive transformer decoder for multi-coin, multi-channel token prediction
     
     Architecture:
-    1. Token Embedding: Separate embeddings for price and volume channels
+    1. Token Embedding: Separate embeddings for price and volume channels (256 vocab)
     2. Channel Fusion: Combine price + volume information
     3. Coin Aggregation: Pool across coins at each timestep
     4. Positional Encoding: Add temporal position information
     5. Transformer Decoder: Causal self-attention (decoder-only, like GPT)
-    6. Prediction Head: Project to 3-way classification per step
+    6. Prediction Head: Project to 256-way classification (next 1 hour)
     
     Key Features:
     - Accepts 4D input: (batch, seq_len, num_coins, 2)
     - Causal masking ensures no future information leakage
-    - Autoregressive generation at inference
+    - Predicts 1 token (next hour) during training
+    - Autoregressive generation at inference (generates 8 hours)
     - Teacher forcing during training
     """
     
@@ -79,9 +81,9 @@ class SimpleTokenPredictor(nn.Module):
         self.config = config
         
         # Architecture parameters
-        self.vocab_size = 3  # Always 3 tokens: down, steady, up
+        self.vocab_size = config['model'].get('vocab_size', 256)  # 256 bins
         self.input_length = config['sequences']['input_length']  # 24
-        self.output_length = config['sequences']['output_length']  # 8
+        self.output_length = config['sequences']['output_length']  # 1 (single next-hour prediction)
         self.num_coins = len(config['data']['coins'])
         self.num_channels = config['sequences'].get('num_channels', 2)  # price + volume
         
@@ -90,7 +92,7 @@ class SimpleTokenPredictor(nn.Module):
         self.d_model = config['model'].get('d_model', 256)
         self.nhead = config['model'].get('num_heads', 4)
         self.num_layers = config['model'].get('num_layers', 4)
-        self.dim_feedforward = config['model'].get('feedforward_dim', 256)
+        self.dim_feedforward = config['model'].get('feedforward_dim', 512)
         self.dropout = config['model'].get('dropout', 0.1)
         
         # Validate dimensions
@@ -109,8 +111,8 @@ class SimpleTokenPredictor(nn.Module):
         self.coin_projection = nn.Linear(self.d_model, self.d_model)
         
         # 4. Positional Encoding
-        # Max positions = input_length + output_length (for autoregressive generation)
-        max_len = self.input_length + self.output_length
+        # Max positions = input_length (24 hours for inference generation)
+        max_len = self.input_length + 8  # 24 + 8 for generation buffer
         self.pos_encoder = PositionalEncoding(
             d_model=self.d_model,
             max_len=max_len,
@@ -130,7 +132,7 @@ class SimpleTokenPredictor(nn.Module):
             num_layers=self.num_layers
         )
         
-        # 6. Prediction Head: Project to 3-way classification
+        # 6. Prediction Head: Project to 256-way classification
         self.prediction_head = nn.Linear(self.d_model, self.vocab_size)
         
         # Initialize weights
@@ -140,8 +142,8 @@ class SimpleTokenPredictor(nn.Module):
         total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         logger.info(f"Initialized SimpleTokenPredictor with {total_params:,} parameters")
         logger.info(f"  Input: {self.input_length} hours × {self.num_coins} coins × {self.num_channels} channels")
-        logger.info(f"  Output: {self.output_length} hours (autoregressive)")
-        logger.info(f"  Vocab: {self.vocab_size} tokens per channel")
+        logger.info(f"  Output: {self.output_length} hour (next hour prediction, autoregressively generated to {self.output_length + 7} hours)")
+        logger.info(f"  Vocab: {self.vocab_size} bins (0-255 for continuous quantization)")
         logger.info(f"  Model dim: {self.d_model}, Heads: {self.nhead}, Layers: {self.num_layers}")
     
     def _init_weights(self):
@@ -202,13 +204,13 @@ class SimpleTokenPredictor(nn.Module):
         
         Args:
             x: Input context, shape (batch, input_length, num_coins, 2)
-            targets: Optional target tokens for teacher forcing (batch, output_length)
+            targets: Optional target token for teacher forcing (batch,) or (batch, 1)
                     Only used during training
         
         Returns:
             logits: Output logits
-                   - Training mode: (batch, output_length, vocab_size)
-                   - Inference mode: (batch, 1, vocab_size) for next token
+                   - Training mode: (batch, vocab_size) for single next-hour token
+                   - Inference mode: (batch, vocab_size) for next token prediction
         """
         B = x.size(0)
         device = x.device
@@ -220,46 +222,40 @@ class SimpleTokenPredictor(nn.Module):
         context_encoded = self.pos_encoder(context_embedded)  # (B, input_length, d_model)
         
         if targets is not None:
-            # Training mode: Proper teacher forcing
-            # Predict targets conditioned on context and previous target tokens (shifted)
-            target_length = targets.size(1)
-
-            # Build decoder input tokens by shifting targets right with a BOS token
-            # Use class 'steady' (1) as BOS to avoid changing vocab size
-            decoder_input_tokens = torch.full((B, target_length), 1, dtype=torch.long, device=device)
-            decoder_input_tokens[:, 1:] = targets[:, :-1]
-
+            # Training mode: Predict single next token conditioned on context
+            # Build decoder input: BOS token (use bin 128 as neutral BOS)
+            decoder_input_tokens = torch.full((B, 1), 128, dtype=torch.long, device=device)
+            
             # Create 4D token tensor for decoder inputs (only XRP price channel used)
-            # Shape: (B, target_length, num_coins, 2)
-            decoder_input = torch.zeros(B, target_length, self.num_coins, 2,
+            # Shape: (B, 1, num_coins, 2)
+            decoder_input = torch.zeros(B, 1, self.num_coins, 2,
                                         dtype=torch.long, device=device)
-            decoder_input[:, :, 0, 0] = decoder_input_tokens  # XRP price channel
-
+            decoder_input[:, 0, 0, 0] = decoder_input_tokens[:, 0]  # XRP price channel
+            
             # Embed decoder inputs
-            decoder_embedded = self._embed_and_process(decoder_input)  # (B, target_length, d_model)
-
+            decoder_embedded = self._embed_and_process(decoder_input)  # (B, 1, d_model)
+            
             # Positional encoding for decoder sequence
-            decoder_encoded = self.pos_encoder(decoder_embedded)  # (B, target_length, d_model)
-
-            # Causal mask over decoder sequence
-            tgt_mask = self._create_causal_mask(target_length, device)
-
-            # Transformer decoder: attend over context (memory) and masked decoder inputs (tgt)
+            decoder_encoded = self.pos_encoder(decoder_embedded)  # (B, 1, d_model)
+            
+            # Causal mask for single token (trivial, but included for consistency)
+            tgt_mask = self._create_causal_mask(1, device)
+            
+            # Transformer decoder: attend over context (memory) and BOS token (tgt)
             decoded = self.transformer_decoder(
                 tgt=decoder_encoded,
                 memory=context_encoded,
                 tgt_mask=tgt_mask
-            )  # (B, target_length, d_model)
-
-            # Project to logits for each target step
-            logits = self.prediction_head(decoded)  # (B, target_length, vocab_size)
-
+            )  # (B, 1, d_model)
+            
+            # Project to logits for next token
+            logits = self.prediction_head(decoded[:, 0, :])  # (B, vocab_size)
+            
             return logits
         else:
-            # Inference helper: return logits for a single BOS token as decoder input
-            # This path is not used for full generation; see generate()
+            # Inference helper: return logits for predicting next token
             decoder_input = torch.zeros(B, 1, self.num_coins, 2, dtype=torch.long, device=device)
-            decoder_input[:, 0, 0, 0] = 1  # BOS = 'steady'
+            decoder_input[:, 0, 0, 0] = 128  # BOS
             decoder_embedded = self._embed_and_process(decoder_input)
             decoder_encoded = self.pos_encoder(decoder_embedded)
             tgt_mask = self._create_causal_mask(1, device)
@@ -268,23 +264,20 @@ class SimpleTokenPredictor(nn.Module):
                 memory=context_encoded,
                 tgt_mask=tgt_mask
             )  # (B, 1, d_model)
-            logits = self.prediction_head(decoded)  # (B, 1, vocab)
+            logits = self.prediction_head(decoded[:, 0, :])  # (B, vocab_size)
             return logits
     
-    def generate(self, x: torch.Tensor, max_length: int = None) -> torch.Tensor:
+    def generate(self, x: torch.Tensor, max_length: int = 8) -> torch.Tensor:
         """
         Autoregressive generation (for inference)
         
         Args:
             x: Input context, shape (batch, input_length, num_coins, 2)
-            max_length: Number of tokens to generate (default: output_length)
+            max_length: Number of tokens to generate (default: 8 hours)
         
         Returns:
             generated: Generated tokens, shape (batch, max_length)
         """
-        if max_length is None:
-            max_length = self.output_length
-        
         self.eval()
         B = x.size(0)
         device = x.device
@@ -294,85 +287,57 @@ class SimpleTokenPredictor(nn.Module):
         with torch.no_grad():
             # Encode context once
             memory = self.pos_encoder(self._embed_and_process(x))  # (B, input_length, d_model)
-
-            # Decoder input tokens (start with BOS)
-            decoder_tokens = torch.full((B, 1), 1, dtype=torch.long, device=device)  # BOS='steady'
-
+            
+            # Current context for sliding window (starts as the initial 24-hour window)
+            current_context = x.clone()  # (B, input_length, num_coins, 2)
+            
             for step in range(max_length):
-                # Build 4D decoder input from tokens
-                dec_len = decoder_tokens.size(1)
-                decoder_input = torch.zeros(B, dec_len, self.num_coins, 2, dtype=torch.long, device=device)
-                decoder_input[:, :, 0, 0] = decoder_tokens
-
-                # Embed + position encode
+                # Get logits for next token given current context
+                context_embedded = self._embed_and_process(current_context)
+                context_encoded = self.pos_encoder(context_embedded)
+                
+                # Decoder input: BOS token
+                decoder_input = torch.zeros(B, 1, self.num_coins, 2, dtype=torch.long, device=device)
+                decoder_input[:, 0, 0, 0] = 128  # BOS
+                
                 decoder_embedded = self._embed_and_process(decoder_input)
                 decoder_encoded = self.pos_encoder(decoder_embedded)
-
-                # Mask and decode
-                tgt_mask = self._create_causal_mask(dec_len, device)
+                
+                tgt_mask = self._create_causal_mask(1, device)
                 decoded = self.transformer_decoder(
                     tgt=decoder_encoded,
-                    memory=memory,
+                    memory=context_encoded,
                     tgt_mask=tgt_mask
-                )  # (B, dec_len, d_model)
-
-                # Predict next token from last position
-                logits = self.prediction_head(decoded[:, -1:, :])  # (B, 1, vocab)
-                next_token = torch.argmax(logits[:, 0, :], dim=-1)  # (B,)
+                )  # (B, 1, d_model)
+                
+                # Predict next token
+                logits = self.prediction_head(decoded[:, 0, :])  # (B, vocab_size)
+                next_token = torch.argmax(logits, dim=-1)  # (B,)
                 generated_tokens.append(next_token)
-
-                # Append for next iteration
-                decoder_tokens = torch.cat([decoder_tokens, next_token.unsqueeze(1)], dim=1)
+                
+                # Slide window: remove first hour, append new prediction
+                # Create new token tensor for the predicted hour (use as price token)
+                new_hour = torch.zeros(B, 1, self.num_coins, 2, dtype=torch.long, device=device)
+                new_hour[:, 0, 0, 0] = next_token  # XRP price channel gets predicted token
+                
+                # Slide: remove first hour and append new
+                current_context = torch.cat([current_context[:, 1:, :, :], new_hour], dim=1)
         
-        # Stack generated tokens (exclude initial BOS)
+        # Stack generated tokens
         generated = torch.stack(generated_tokens, dim=1)  # (B, max_length)
         
         return generated
     
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Generate predictions using autoregressive generation
+        Generate predictions using autoregressive generation (8 hours)
         
         Args:
             x: Input context, shape (batch, input_length, num_coins, 2)
         
         Returns:
-            predictions: Predicted tokens, shape (batch, output_length)
+            predictions: Predicted tokens, shape (batch, 8)
         """
-        return self.generate(x, max_length=self.output_length)
-    
-    def predict_probs(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Generate prediction probabilities via autoregressive generation
-        
-        Args:
-            x: Input context, shape (batch, input_length, num_coins, 2)
-        
-        Returns:
-            probs: Prediction probabilities, shape (batch, output_length, vocab_size)
-        """
-        self.eval()
-        B = x.size(0)
-        device = x.device
-        
-        all_probs = []
-        
-        with torch.no_grad():
-            current_input = x
-            
-            for step in range(self.output_length):
-                logits = self.forward(current_input)  # (B, 1, vocab_size)
-                probs = torch.softmax(logits[:, 0, :], dim=-1)  # (B, vocab_size)
-                all_probs.append(probs)
-                
-                # Sample next token for next iteration
-                next_token = torch.argmax(probs, dim=-1)  # (B,)
-                
-                # TODO: Update current_input with next_token
-        
-        # Stack probabilities
-        all_probs = torch.stack(all_probs, dim=1)  # (B, output_length, vocab_size)
-        
-        return all_probs
+        return self.generate(x, max_length=8)
 
 
