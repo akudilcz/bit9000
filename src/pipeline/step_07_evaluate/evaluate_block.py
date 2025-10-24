@@ -177,7 +177,7 @@ class EvaluateBlock(PipelineBlock):
             for i in range(0, len(X), batch_size):
                 X_batch = X[i:i+batch_size].to(device)
                 # Use autoregressive generation (not teacher forcing)
-                preds = model.generate(X_batch, max_len=self.config['sequences']['output_length'])
+                preds = model.generate(X_batch, max_length=self.config['sequences']['output_length'])
                 predictions.append(preds.cpu().numpy())
         
         return np.concatenate(predictions, axis=0)
