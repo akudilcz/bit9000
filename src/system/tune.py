@@ -100,8 +100,9 @@ class HyperparameterTuner:
         learning_rate = trial.suggest_float("learning_rate", 5e-6, 5e-3, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True)
         dropout = trial.suggest_float("dropout", 0.0, 0.5)
-        label_smoothing = trial.suggest_float("label_smoothing", 0.01, 0.08)
+        label_smoothing = trial.suggest_float("label_smoothing", 0.001, 0.08)
         max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 2.0)
+        gaussian_noise = trial.suggest_float("gaussian_noise", 0.0, 0.15)  # NEW: input noise scale
         batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
 
         # Architecture hyperparameters - EXPANDED to include MUCH smaller models
@@ -135,6 +136,7 @@ class HyperparameterTuner:
             "num_heads": num_heads,
             "feedforward_dim": feedforward_dim,
             "warmup_epochs": warmup_epochs,
+            "gaussian_noise": gaussian_noise,
         }
 
     def _objective(self, trial: optuna.Trial) -> float:
@@ -164,6 +166,7 @@ class HyperparameterTuner:
             trial_config['training']['weight_decay'] = params['weight_decay']
             trial_config['training']['label_smoothing'] = params['label_smoothing']
             trial_config['training']['max_grad_norm'] = params['max_grad_norm']
+            trial_config['training']['gaussian_noise'] = params['gaussian_noise']
 
             # Create model with sampled hyperparameters
             model = SimpleTokenPredictor(trial_config).to(self.device)

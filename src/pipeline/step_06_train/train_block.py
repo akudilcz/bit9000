@@ -246,7 +246,8 @@ class TrainBlock(PipelineBlock):
             # Convert to float, add noise, convert back to long
             if model.training:
                 X_float = X_batch.float()  # Convert to float for noise addition
-                noise = torch.randn_like(X_float) * 0.05  # Small noise: 5% of input scale
+                noise_scale = self.config['training'].get('gaussian_noise', 0.05)  # Get from config
+                noise = torch.randn_like(X_float) * noise_scale
                 X_batch_noisy = (X_float + noise).long()  # Add noise and convert back to long
             else:
                 X_batch_noisy = X_batch
