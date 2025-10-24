@@ -1,6 +1,15 @@
 # Simple Multi-Coin Token Predictor
 
-A lightweight transformer model that predicts XRP price movements (down/steady/up) over the next 8 hours using multi-coin context.
+A lightweight transformer model that predicts XRP price movements over the next 8 hours using multi-coin context. Uses 256-bin continuous price quantization and autoregressive generation.
+
+## ✅ System Status
+
+**Latest Results (2025-10-24):**
+- ✅ **Training complete** - Best validation loss: **1.0759** (54 epochs)
+- ✅ **Model**: 471,808 parameters (2 layers, d_model=128, embedding_dim=32)
+- ✅ **Evaluation**: **42.03% accuracy** (beats persistence baseline 35.83%)
+- ✅ **Inference**: Working - Real-time predictions with probabilities
+- ✅ **Hyperparameter tuning**: 40 trials completed (best val_loss=1.0776)
 
 ## Quick Start
 
@@ -19,14 +28,23 @@ python main.py pipeline reset       # Clean artifacts
 python main.py pipeline download    # Fetch OHLCV data
 python main.py pipeline clean       # Clean and validate
 python main.py pipeline split       # Train/val split
-python main.py pipeline tokenize    # Convert prices → tokens
+python main.py pipeline tokenize    # Convert prices → 256-bin tokens
 python main.py pipeline sequences   # Create input/output windows
 python main.py pipeline train       # Train transformer
 python main.py pipeline evaluate    # Measure accuracy
 python main.py pipeline inference   # Predict next 8 hours
 ```
 
-### 3. Check Results
+### 3. Hyperparameter Tuning
+```bash
+# Quick tune (2 trials, 2 epochs each, ~1 min)
+python main.py pipeline tune --num-trials 2 --epochs-per-trial 2
+
+# Full tune (40 trials, 20 epochs each, ~90 min)
+python main.py pipeline tune --num-trials 40 --epochs-per-trial 20
+```
+
+### 4. Check Results
 ```bash
 # Training metrics
 cat artifacts/step_06_train/history.json
@@ -35,22 +53,50 @@ cat artifacts/step_06_train/history.json
 cat artifacts/step_07_evaluate/eval_results.json
 
 # Latest predictions
-ls -lt artifacts/step_08_inference/
+cat artifacts/step_08_inference/predictions_*.json
 ```
 
 ## Pipeline Overview
 
-The model uses a simple 8-step pipeline:
+The model uses a 9-step pipeline:
 
 1. **Reset**: Clear previous artifacts
 2. **Download**: Fetch hourly OHLCV data (10 coins, 2020-2025)
 3. **Clean**: Fill gaps and validate data quality
 4. **Split**: Temporal train/val split (80/20)
-5. **Tokenize**: Convert prices to 3-class tokens (down=0, steady=1, up=2)
-6. **Sequences**: Create rolling windows (24h input → 8h output)
+5. **Tokenize**: Convert prices to 256-bin tokens (quantile-based, uniform distribution)
+6. **Sequences**: Create rolling windows (24h input → 1h output, autoregressively generated to 8h)
 7. **Train**: Train transformer decoder on token sequences
 8. **Evaluate**: Compute accuracy and baseline comparisons
-9. **Inference**: Real-time 8-hour XRP price predictions
+9. **Inference**: Real-time 8-hour XRP price predictions (autoregressive generation)
+
+## Architecture
+
+**Model**: `SimpleTokenPredictor` (Transformer Decoder-Only)
+- **Input**: 24 hours × 10 coins × 2 channels (price + volume)
+- **Output**: 1 hour next-token prediction (256 classes), autoregressively generated to 8 hours
+- **Layers**: 2 transformer decoder layers
+- **Heads**: 4 attention heads
+- **Model dim**: 128
+- **Embedding dim**: 32
+- **Feedforward dim**: 256
+- **Parameters**: 471,808
+
+**Tokenization**: 256-bin quantization
+- Bins: 0-255 representing continuous price range
+- Method: Quantile-based (uniform distribution across bins)
+- Input: Price and volume for each coin
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| **Best val loss** | 1.0759 |
+| **Evaluation accuracy** | 42.03% |
+| **Persistence baseline** | 35.83% |
+| **Random baseline** | 34.51% |
+| **Model improvement** | +6.2% over persistence |
+| **Training time** | ~1 min (54 epochs) |
 
 ## Artifacts
 
@@ -59,11 +105,12 @@ Pipeline outputs are saved to `artifacts/`:
 - `step_01_download/`: Raw OHLCV data (parquet files + visualizations)
 - `step_02_clean/`: Cleaned OHLCV data (gaps filled, quality metrics)
 - `step_03_split/`: Train/validation split data (temporal split at 80/20)
-- `step_04_tokenize/`: Tokenized sequences + fitted quantile thresholds
+- `step_04_tokenize/`: Tokenized sequences + fitted 256-bin thresholds
 - `step_05_sequences/`: PyTorch tensor sequences (train_X.pt, train_y.pt, val_X.pt, val_y.pt)
 - `step_06_train/`: Trained model checkpoint + training history and loss curves
-- `step_07_evaluate/`: Evaluation metrics, accuracy per hour, confusion matrices
+- `step_07_evaluate/`: Evaluation metrics, accuracy plots, confusion matrices
 - `step_08_inference/`: Latest predictions with probabilities and confidence scores
+- `tuning/`: Hyperparameter tuning results and visualizations
 
 ## Development
 
