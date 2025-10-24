@@ -183,10 +183,10 @@ class SimpleTokenPredictor(nn.Module):
             drop_path = StochasticDepth(stochastic_depth_prob)
             
             def forward_with_drop_path(tgt, memory, tgt_mask=None, memory_mask=None, 
-                                      tgt_key_padding_mask=None, memory_key_padding_mask=None):
-                # Original layer forward
+                                      tgt_key_padding_mask=None, memory_key_padding_mask=None, **kwargs):
+                # Original layer forward (kwargs handles tgt_is_causal and other args)
                 x = original_forward(tgt, memory, tgt_mask, memory_mask, 
-                                   tgt_key_padding_mask, memory_key_padding_mask)
+                                   tgt_key_padding_mask, memory_key_padding_mask, **kwargs)
                 # Apply stochastic depth to the residual
                 return drop_path(x - tgt) + tgt if tgt.shape == x.shape else x
             
