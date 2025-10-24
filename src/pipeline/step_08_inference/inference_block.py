@@ -257,7 +257,7 @@ class InferenceBlock(PipelineBlock):
         
         with torch.no_grad():
             # Autoregressive generation
-            preds = model.generate(X, max_len=output_length)  # (1, output_length)
+            preds = model.generate(X, max_length=output_length)  # (1, output_length)
             
             # For probabilities, we need to do forward pass with teacher forcing
             # or track probabilities during generation
