@@ -14,16 +14,13 @@ pip install -r requirements.txt
 # Run all steps (download → train → evaluate)
 python main.py pipeline run-all
 
-# Run from clean step (skips reset and download - saves time!)
-python main.py pipeline run-from-clean
-
 # Or run individual steps:
 python main.py pipeline reset       # Clean artifacts
-python main.py pipeline download    # Fetch data (2020-2025)
+python main.py pipeline download    # Fetch OHLCV data
 python main.py pipeline clean       # Clean and validate
-python main.py pipeline split       # Train/val split (80/20)
+python main.py pipeline split       # Train/val split
 python main.py pipeline tokenize    # Convert prices → tokens
-python main.py pipeline sequences   # Create 48h → 8h windows
+python main.py pipeline sequences   # Create input/output windows
 python main.py pipeline train       # Train transformer
 python main.py pipeline evaluate    # Measure accuracy
 python main.py pipeline inference   # Predict next 8 hours
@@ -43,70 +40,26 @@ ls -lt artifacts/step_08_inference/
 
 ## Pipeline Overview
 
-**Philosophy**: Simplicity over complexity
-- No feature engineering, no complex preprocessing
-- Just raw price movements → discrete tokens → predictions
+The model uses a simple 8-step pipeline:
 
-```
-Step 1: Download   → Fetch hourly OHLCV (10 coins, 2020-2025)
-Step 2: Clean      → Fill gaps, validate quality
-Step 3: Split      → Temporal train/val split (80/20)
-Step 4: Tokenize   → Convert prices to tokens (down=0, steady=1, up=2)
-Step 5: Sequences  → Create 48h input → 8h output windows
-Step 6: Train      → Train transformer on token sequences
-Step 7: Evaluate   → Per-hour accuracy, confusion matrices
-Step 8: Inference  → Predict next 8 hours
-```
-
-## Model Architecture
-
-**Input**: 48 tokens × 10 coins (2 days of hourly movements)
-**Output**: 8 tokens (next 8 hours of XRP price direction)
-**Vocabulary**: 3 tokens {down=0, steady=1, up=2}
-
-### Architecture
-- Token Embedding (3 → d_model)
-- Coin Aggregation (mean pooling across coins)
-- Positional Encoding (sinusoidal)
-- Transformer Encoder (4 layers, 8 heads)
-- Prediction Head (8 hours × 3 classes)
-
-### Configuration
-Edit `config.yaml` to adjust:
-- `sequences.input_length`: 48 hours (default)
-- `sequences.output_length`: 8 hours (default)
-- `model.d_model`: 256 (model dimension)
-- `model.nhead`: 8 (attention heads)
-- `model.num_layers`: 4 (transformer layers)
-- `training.epochs`: 100
-- `training.batch_size`: 128
-- `training.learning_rate`: 0.0001
-
-## Expected Performance
-
-| Metric | Target | Random Baseline |
-|--------|--------|-----------------|
-| Hour 1 Accuracy | ~45% | 33% |
-| Hour 8 Accuracy | ~37% | 33% |
-| Mean Accuracy | ~40% | 33% |
-| Sequence Accuracy | ~1-2% | 0.015% |
-
-## Design Principles
-
-1. **Simplicity**: Raw movements → tokens → predictions
-2. **Balanced classes**: Quantile thresholds (33/33/33 distribution)
-3. **Multi-coin context**: BTC/ETH patterns inform XRP predictions
-4. **No data leakage**: Thresholds fit on training data only
-5. **Short horizon**: 8 hours is predictable and actionable
+1. **Reset**: Clear previous artifacts
+2. **Download**: Fetch hourly OHLCV data (10 coins, 2020-2025)
+3. **Clean**: Fill gaps and validate data quality
+4. **Split**: Temporal train/val split (80/20)
+5. **Tokenize**: Convert prices to 3-class tokens (down=0, steady=1, up=2)
+6. **Sequences**: Create rolling windows (24h input → 8h output)
+7. **Train**: Train transformer decoder on token sequences
+8. **Evaluate**: Compute accuracy and baseline comparisons
+9. **Inference**: Real-time 8-hour XRP price predictions
 
 ## Artifacts
 
-All outputs saved to `artifacts/`:
-- `step_04_tokenize/`: Tokens + thresholds JSON
-- `step_05_sequences/`: PyTorch tensors (train_X.pt, etc.)
-- `step_06_train/`: Model checkpoint + training history
-- `step_07_evaluate/`: Metrics + confusion matrices
-- `step_08_inference/`: Prediction JSON with probabilities
+Pipeline outputs are saved to `artifacts/`:
+- `step_04_tokenize/`: Tokenized sequences + fitted thresholds
+- `step_05_sequences/`: PyTorch tensor sequences for training
+- `step_06_train/`: Trained model checkpoint + loss curves
+- `step_07_evaluate/`: Evaluation metrics + confusion matrices
+- `step_08_inference/`: Predictions with confidence scores
 
 ## Development
 
@@ -131,26 +84,15 @@ bit9000/
 │   │   ├── io.py                    # Artifact I/O utilities
 │   │   ├── schemas.py               # Data schemas (Pydantic)
 │   │   │
-│   │   ├── step_00_reset/
-│   │   │   └── reset_block.py       # Clear artifacts
-│   │   ├── step_01_download/
-│   │   │   ├── data_collector.py    # Fetch OHLCV data
-│   │   │   └── download_block.py    # Download pipeline step
-│   │   ├── step_02_clean/
-│   │   │   ├── clean_block.py       # Data cleaning
-│   │   │   └── data_processor.py    # Preprocessing utilities
-│   │   ├── step_03_split/
-│   │   │   └── split_block.py       # Train/val split
-│   │   ├── step_04_tokenize/
-│   │   │   └── tokenize_block.py    # Price → tokens
-│   │   ├── step_05_sequences/
-│   │   │   └── sequence_block.py    # Create rolling windows
-│   │   ├── step_06_train/
-│   │   │   └── train_block.py       # Model training
-│   │   ├── step_07_evaluate/
-│   │   │   └── evaluate_block.py    # Validation & metrics
-│   │   └── step_08_inference/
-│   │       └── inference_block.py   # Real-time prediction
+│   │   ├── step_00_reset/           # Clear artifacts
+│   │   ├── step_01_download/        # Fetch OHLCV data
+│   │   ├── step_02_clean/           # Data cleaning
+│   │   ├── step_03_split/           # Train/val split
+│   │   ├── step_04_tokenize/        # Price → tokens
+│   │   ├── step_05_sequences/       # Create rolling windows
+│   │   ├── step_06_train/           # Model training
+│   │   ├── step_07_evaluate/        # Validation & metrics
+│   │   └── step_08_inference/       # Real-time prediction
 │   │
 │   ├── system/
 │   │   ├── pretrain.py              # Pretraining utilities
@@ -164,51 +106,16 @@ bit9000/
 │       └── plot_utils.py            # Visualization utilities
 │
 ├── tests/
-│   ├── conftest.py                  # Pytest fixtures & configuration
-│   │
-│   ├── model/
-│   │   └── test_token_predictor.py  # Model unit tests
-│   │
-│   ├── pipeline/
-│   │   ├── unit/                    # Unit tests
-│   │   │   ├── test_artifact_io.py
-│   │   │   ├── test_clean_block.py
-│   │   │   ├── test_download_block.py
-│   │   │   ├── test_pipeline_base.py
-│   │   │   ├── test_schemas_validation.py
-│   │   │   └── quality/
-│   │   │       └── test_clean_quality.py
-│   │   ├── clean/                   # Integration tests
-│   │   │   ├── test_clean_block.py
-│   │   │   └── test_clean_quality.py
-│   │   ├── download/
-│   │   │   └── test_download_block.py
-│   │   ├── sequences/
-│   │   │   └── test_sequence_block.py
-│   │   ├── tokenize/
-│   │   │   └── test_tokenize_block.py
-│   │   └── integration/             # End-to-end tests
-│   │       (reserved for full pipeline tests)
-│   │
-│   ├── utils/
-│   │   ├── test_logger.py
-│   │   ├── test_logger_edge_cases.py
-│   │   └── test_metrics.py
-│   │
+│   ├── conftest.py                  # Pytest fixtures
+│   ├── model/                       # Model tests
+│   ├── pipeline/                    # Pipeline tests (unit + integration)
+│   ├── utils/                       # Utility tests
 │   └── data/                        # Test fixtures
 │
 └── artifacts/                       # Pipeline outputs (gitignored)
-    ├── step_00_reset/
-    ├── step_01_download/
-    ├── step_02_clean/
-    ├── step_03_split/
-    ├── step_04_tokenize/           # tokens + thresholds
-    ├── step_05_sequences/          # tensor sequences
-    ├── step_06_train/              # model checkpoint
-    ├── step_07_evaluate/           # metrics & confusion matrices
-    ├── step_08_inference/          # predictions
-    ├── checkpoints/                # PyTorch Lightning checkpoints
-    └── lightning_logs/             # Training logs
+    ├── step_00_reset/ through step_08_inference/
+    ├── checkpoints/                 # Model checkpoints
+    └── lightning_logs/              # Training logs
 ```
 
 ### Testing
@@ -216,22 +123,17 @@ bit9000/
 # Test imports
 python -c "from src.model.token_predictor import SimpleTokenPredictor; print('OK')"
 
-# Test tokenization only
-python main.py pipeline reset
-python main.py pipeline download --end-date 2021-01-01  # Small dataset
-python main.py pipeline clean
-python main.py pipeline split
-python main.py pipeline tokenize
+# Run tests
+pytest tests/
 
-# Check tokenization results
-cat artifacts/step_04_tokenize/tokenize_artifact.json
+# Run with coverage
+pytest tests/ --cov=src
 ```
 
 ## Documentation
 
-- **DESIGN.md**: Complete design philosophy and architecture
-- **IMPLEMENTATION.md**: Implementation details and decisions
-- **This README**: Quick start and usage guide
+- **DESIGN.md**: Complete technical design, architecture, and data flow
+- **This README**: Quick start and project overview
 
 ## License
 
