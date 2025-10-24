@@ -244,7 +244,7 @@ class TrainBlock(PipelineBlock):
             
             # Add Gaussian noise to input during training (helps escape local minima)
             # Noise std is 0.1 * input std to avoid overwhelming the signal
-            if self.training:
+            if model.training:
                 noise = torch.randn_like(X_batch) * 0.05  # Small noise: 5% of input scale
                 X_batch_noisy = X_batch + noise
             else:
