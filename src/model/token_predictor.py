@@ -178,9 +178,9 @@ class SimpleTokenPredictor(nn.Module):
         # Add stochastic depth to residual connections
         stochastic_depth_prob = config['model'].get('stochastic_depth', 0.0)
         if stochastic_depth_prob > 0:
-            # Wrap decoder layer with stochastic depth
+            # Attach stochastic depth module to decoder layer
+            decoder_layer.drop_path = StochasticDepth(stochastic_depth_prob)
             original_forward = decoder_layer.forward
-            drop_path = StochasticDepth(stochastic_depth_prob)
             
             def forward_with_drop_path(tgt, memory, tgt_mask=None, memory_mask=None, 
                                       tgt_key_padding_mask=None, memory_key_padding_mask=None, **kwargs):
@@ -188,7 +188,7 @@ class SimpleTokenPredictor(nn.Module):
                 x = original_forward(tgt, memory, tgt_mask, memory_mask, 
                                    tgt_key_padding_mask, memory_key_padding_mask, **kwargs)
                 # Apply stochastic depth to the residual
-                return drop_path(x - tgt) + tgt if tgt.shape == x.shape else x
+                return decoder_layer.drop_path(x - tgt) + tgt if tgt.shape == x.shape else x
             
             decoder_layer.forward = forward_with_drop_path
         
