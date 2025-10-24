@@ -23,7 +23,7 @@ from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.model.token_predictor import SimpleTokenPredictor
+from src.model import create_model
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -169,7 +169,7 @@ class HyperparameterTuner:
             trial_config['training']['gaussian_noise'] = params['gaussian_noise']
 
             # Create model with sampled hyperparameters
-            model = SimpleTokenPredictor(trial_config).to(self.device)
+            model = create_model(trial_config).to(self.device)
 
             # Create data loaders
             train_dataset = TensorDataset(self.train_X, self.train_y)
@@ -204,7 +204,7 @@ class HyperparameterTuner:
             best_val_accuracy = 0.0
             epochs_without_improvement = 0
             early_stopping_patience = 10
-            min_delta = 0.0001
+            min_delta = 0.000001
 
             for epoch in range(self.epochs_per_trial):
                 # Training
@@ -284,22 +284,22 @@ class HyperparameterTuner:
 
                 logger.info(
                     f"Trial {trial.number} Epoch {epoch+1}/{self.epochs_per_trial}: "
-                    f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_acc={val_accuracy:.4f}"
+                    f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_acc={val_accuracy:.8f}"
                 )
                 print(
                     f"Trial {trial.number} Epoch {epoch+1}/{self.epochs_per_trial}: "
-                    f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_acc={val_accuracy:.4f}"
+                    f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_acc={val_accuracy:.8f}"
                 )
 
                 # Early stopping
                 if epochs_without_improvement >= early_stopping_patience:
-                    logger.info(f"Early stopping triggered at epoch {epoch+1} (no improvement for {early_stopping_patience} epochs, val_acc={val_accuracy:.4f})")
+                    logger.info(f"Early stopping triggered at epoch {epoch+1} (no improvement for {early_stopping_patience} epochs, val_acc={val_accuracy:.8f})")
                     break
 
             logger.info(
-                f"Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}"
+                f"Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.8f}"
             )
-            print(f"[DONE] Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}")
+            print(f"[DONE] Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.8f}")
             return -best_val_accuracy  # Return negative accuracy (Optuna minimizes)
 
         except Exception as e:

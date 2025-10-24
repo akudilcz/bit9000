@@ -16,7 +16,7 @@ from typing import Dict, List
 
 from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import ArtifactMetadata
-from src.model.token_predictor import SimpleTokenPredictor
+from src.model import create_model
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -108,7 +108,7 @@ class TrainBlock(PipelineBlock):
         
         # Initialize model
         logger.info("\n[2/4] Initializing model...")
-        model = SimpleTokenPredictor(self.config)
+        model = create_model(self.config)
         model = model.to(device)
         logger.info(f"  Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         

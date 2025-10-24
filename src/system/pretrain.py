@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import Config
-from src.model.token_predictor import SimpleTokenPredictor
+from src.model import create_model
 from src.model.trainer import SimpleTrainer
 from src.pipeline.schemas import TokenizeArtifact, PretrainArtifact
 from src.utils.logging_utils import get_logger
@@ -202,20 +202,7 @@ def run_pretraining(
     logger.info("\n[2/3] Creating model...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = SimpleTokenPredictor(
-        vocab_size=config.model.vocab_size,
-        embedding_dim=config.model.embedding_dim,
-        d_model=config.model.d_model,
-        num_heads=config.model.num_heads,
-        num_layers=config.model.num_layers,
-        feedforward_dim=config.model.feedforward_dim,
-        dropout=config.model.dropout,
-        input_length=config.sequences.input_length,
-        output_length=config.sequences.output_length,
-        num_coins=config.data.num_coins,
-        num_classes=config.model.num_classes,
-        num_channels=config.sequences.num_channels,
-    ).to(device)
+    model = create_model(config.model_dump()).to(device)
 
     logger.info(f"  Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 

@@ -18,7 +18,7 @@ import json
 
 from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import ArtifactMetadata
-from src.model.token_predictor import SimpleTokenPredictor
+from src.model import create_model
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -69,7 +69,7 @@ class EvaluateBlock(PipelineBlock):
         
         # Load model
         logger.info("\n[1/5] Loading trained model...")
-        model = SimpleTokenPredictor(self.config)
+        model = create_model(self.config)
         checkpoint = torch.load(train_artifact.model_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         model = model.to(device)

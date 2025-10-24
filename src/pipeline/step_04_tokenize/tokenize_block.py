@@ -1,10 +1,10 @@
-"""Step 4: Tokenize - Convert prices and volume to balanced token sequences
+"""Step 4: Tokenize - Convert prices and volume to discrete token sequences
 
-Philosophy: Simple price and volume movements → discrete tokens (down/steady/up)
+Philosophy: Simple price and volume movements → discrete tokens (256-bin quantization)
 - 2 channels: price (log returns) and volume (log changes)
-- Quantile thresholds ensure ~33% distribution per coin per channel
+- Quantile-based binning ensures uniform distribution across 256 bins
 - No engineered features, just raw movements
-- Fit thresholds on train data only (no leakage)
+- Fit bin edges on train data only (no leakage)
 """
 
 import pandas as pd
@@ -47,7 +47,7 @@ class TokenizeArtifact:
 
 
 class TokenizeBlock(PipelineBlock):
-    """Convert prices and volume to balanced 3-token sequences using quantile thresholds"""
+    """Convert prices and volume to 256-bin token sequences using quantile-based binning"""
     
     def run(self, split_artifact: SplitDataArtifact):
         """
@@ -86,35 +86,46 @@ class TokenizeBlock(PipelineBlock):
         logger.info(f"  Coins: {coins}")
         logger.info(f"  Channels: price + volume")
         
-        # FIT: Calculate quantile thresholds on training data
-        logger.info("\n[2/4] FIT: Calculating quantile thresholds on TRAINING data...")
-        thresholds = self._fit_thresholds(train_df, coins)
+        # FIT: Calculate quantile-based bin edges on training data
+        logger.info("\n[2/4] FIT: Calculating quantile-based bin edges on TRAINING data...")
+        bin_edges = self._fit_bin_edges(train_df, coins)
         
-        # Log thresholds
+        # Log bin edges info
+        vocab_size = self.config['tokenization']['vocab_size']
+        logger.info(f"  Using {vocab_size} bins (0-{vocab_size-1})")
         for coin in coins:
-            if coin in thresholds:
-                price_low, price_high = thresholds[coin]['price']
-                vol_low, vol_high = thresholds[coin]['volume']
+            if coin in bin_edges:
+                price_edges = bin_edges[coin]['price']
+                volume_edges = bin_edges[coin]['volume']
                 logger.info(f"  {coin}:")
-                logger.info(f"    Price:  tau_low={price_low:.6f}, tau_high={price_high:.6f}")
-                logger.info(f"    Volume: tau_low={vol_low:.6f}, tau_high={vol_high:.6f}")
+                logger.info(f"    Price:  {len(price_edges)} bin edges (min={price_edges.min():.6f}, max={price_edges.max():.6f})")
+                logger.info(f"    Volume: {len(volume_edges)} bin edges (min={volume_edges.min():.6f}, max={volume_edges.max():.6f})")
         
-        # TRANSFORM: Apply thresholds to train and val
+        # TRANSFORM: Apply bin edges to train and val
         logger.info("\n[3/4] TRANSFORM: Tokenizing train and val data...")
-        train_tokens = self._transform_to_tokens(train_df, coins, thresholds)
-        val_tokens = self._transform_to_tokens(val_df, coins, thresholds)
+        train_tokens = self._transform_to_tokens(train_df, coins, bin_edges)
+        val_tokens = self._transform_to_tokens(val_df, coins, bin_edges)
         
         logger.info(f"  Train tokens: {train_tokens.shape} (columns: {list(train_tokens.columns)})")
         logger.info(f"  Val tokens: {val_tokens.shape}")
         
-        # Verify balanced distribution on training data
+        # Verify distribution on training data
         token_distribution = self._compute_distribution(train_tokens, val_tokens)
-        logger.info("\n  Token distribution:")
-        for token in [0, 1, 2]:
-            token_name = ['down', 'steady', 'up'][token]
-            train_pct = token_distribution[token]['train'] * 100
-            val_pct = token_distribution[token]['val'] * 100
-            logger.info(f"    {token} ({token_name:6}): Train={train_pct:5.1f}%, Val={val_pct:5.1f}%")
+        logger.info("\n  Token distribution (showing first 10 bins):")
+        for token in range(min(10, vocab_size)):
+            train_pct = token_distribution.get(token, {}).get('train', 0) * 100
+            val_pct = token_distribution.get(token, {}).get('val', 0) * 100
+            logger.info(f"    {token:3d}: Train={train_pct:5.1f}%, Val={val_pct:5.1f}%")
+        
+        # Show distribution stats
+        train_ratios = [token_distribution.get(i, {}).get('train', 0) for i in range(vocab_size)]
+        val_ratios = [token_distribution.get(i, {}).get('val', 0) for i in range(vocab_size)]
+        expected_ratio = 1.0 / vocab_size
+        
+        logger.info(f"\n  Distribution stats:")
+        logger.info(f"    Expected uniform ratio: {expected_ratio:.3%}")
+        logger.info(f"    Train min/max ratio: {min(train_ratios):.3%} / {max(train_ratios):.3%}")
+        logger.info(f"    Val min/max ratio: {min(val_ratios):.3%} / {max(val_ratios):.3%}")
         
         # Save artifacts
         logger.info("\n[4/4] Saving artifacts...")
@@ -130,11 +141,18 @@ class TokenizeBlock(PipelineBlock):
         logger.info(f"  Saved train tokens: {train_path}")
         logger.info(f"  Saved val tokens: {val_path}")
         
-        # Save thresholds (for inference)
-        thresholds_path = block_dir / "thresholds.json"
-        with open(thresholds_path, 'w') as f:
-            json.dump(thresholds, f, indent=2)
-        logger.info(f"  Saved thresholds: {thresholds_path}")
+        # Save bin edges (for inference)
+        bin_edges_path = block_dir / "bin_edges.json"
+        # Convert numpy arrays to lists for JSON serialization
+        bin_edges_serializable = {}
+        for coin, channels in bin_edges.items():
+            bin_edges_serializable[coin] = {
+                'price': channels['price'].tolist(),
+                'volume': channels['volume'].tolist()
+            }
+        with open(bin_edges_path, 'w') as f:
+            json.dump(bin_edges_serializable, f, indent=2)
+        logger.info(f"  Saved bin edges: {bin_edges_path}")
         
         # Create artifact
         num_channels = 2  # price + volume
@@ -143,7 +161,7 @@ class TokenizeBlock(PipelineBlock):
             val_path=val_path,
             train_shape=(train_tokens.shape[0], len(coins) * num_channels),
             val_shape=(val_tokens.shape[0], len(coins) * num_channels),
-            thresholds_path=thresholds_path,
+            thresholds_path=bin_edges_path,
             token_distribution=token_distribution,
             metadata=self.create_metadata(
                 upstream_inputs={
@@ -168,23 +186,26 @@ class TokenizeBlock(PipelineBlock):
         
         return artifact
     
-    def _fit_thresholds(self, train_df: pd.DataFrame, coins: list) -> Dict[str, Dict[str, Tuple[float, float]]]:
+    def _fit_bin_edges(self, train_df: pd.DataFrame, coins: list) -> Dict[str, Dict[str, np.ndarray]]:
         """
-        FIT: Calculate quantile thresholds on training data for price and volume
+        FIT: Calculate quantile-based bin edges on training data for price and volume
         
         For each coin:
         - Price channel: Compute hourly log returns: r = log(close[t] / close[t-1])
         - Volume channel: Compute hourly log changes: v = log(volume[t] / volume[t-1])
-        - For each channel, find 33rd and 67th percentiles
+        - For each channel, find 255 quantile thresholds to create 256 bins
         
         Args:
             train_df: Training data with COIN_close and COIN_volume columns
             coins: List of coin symbols
             
         Returns:
-            Dictionary {coin: {price: (tau_low, tau_high), volume: (tau_low, tau_high)}}
+            Dictionary {coin: {price: bin_edges, volume: bin_edges}}
         """
-        thresholds = {}
+        vocab_size = self.config['tokenization']['vocab_size']  # 256
+        percentiles = self.config['tokenization']['percentiles']  # [1, 2, ..., 99]
+        
+        bin_edges = {}
         
         for coin in coins:
             close_col = f"{coin}_close"
@@ -208,37 +229,34 @@ class TokenizeBlock(PipelineBlock):
                 logger.warning(f"  No valid data for {coin}, skipping")
                 continue
             
-            # Calculate quantile thresholds
-            price_tau_low = price_returns.quantile(0.33)
-            price_tau_high = price_returns.quantile(0.67)
+            # Calculate quantile-based bin edges
+            price_bin_edges = np.percentile(price_returns, percentiles)
+            volume_bin_edges = np.percentile(volume_changes, percentiles)
             
-            volume_tau_low = volume_changes.quantile(0.33)
-            volume_tau_high = volume_changes.quantile(0.67)
-            
-            thresholds[coin] = {
-                'price': (float(price_tau_low), float(price_tau_high)),
-                'volume': (float(volume_tau_low), float(volume_tau_high))
+            bin_edges[coin] = {
+                'price': price_bin_edges,
+                'volume': volume_bin_edges
             }
         
-        return thresholds
+        return bin_edges
     
     def _transform_to_tokens(self, df: pd.DataFrame, coins: list, 
-                            thresholds: Dict[str, Dict[str, Tuple[float, float]]]) -> pd.DataFrame:
+                            bin_edges: Dict[str, Dict[str, np.ndarray]]) -> pd.DataFrame:
         """
-        TRANSFORM: Convert prices and volume to tokens using fitted thresholds
+        TRANSFORM: Convert prices and volume to tokens using fitted bin edges
         
         Token mapping (applied independently to each channel):
-        - 0 (down): value ≤ tau_low
-        - 1 (steady): tau_low < value ≤ tau_high
-        - 2 (up): value > tau_high
+        - Use np.digitize to assign values to bins (0-255)
+        - Values below min bin edge → bin 0
+        - Values above max bin edge → bin 255
         
         Args:
             df: DataFrame with COIN_close and COIN_volume columns
             coins: List of coin symbols
-            thresholds: Fitted thresholds {coin: {price: (...), volume: (...)}}
+            bin_edges: Fitted bin edges {coin: {price: bin_edges, volume: bin_edges}}
             
         Returns:
-            DataFrame with columns: COIN_price, COIN_volume (token values 0/1/2)
+            DataFrame with columns: COIN_price, COIN_volume (token values 0-255)
         """
         tokens_dict = {}
         
@@ -250,19 +268,17 @@ class TokenizeBlock(PipelineBlock):
                 logger.warning(f"  Missing columns for {coin}, skipping")
                 continue
             
-            if coin not in thresholds:
-                logger.warning(f"  No thresholds for {coin}, skipping")
+            if coin not in bin_edges:
+                logger.warning(f"  No bin edges for {coin}, skipping")
                 continue
             
             # PRICE CHANNEL
             prices = df[close_col]
             price_returns = np.log(prices / prices.shift(1))
             
-            price_tau_low, price_tau_high = thresholds[coin]['price']
-            price_tokens = np.full(len(price_returns), np.nan)
-            price_tokens[price_returns <= price_tau_low] = 0  # down
-            price_tokens[(price_returns > price_tau_low) & (price_returns <= price_tau_high)] = 1  # steady
-            price_tokens[price_returns > price_tau_high] = 2  # up
+            # Use np.digitize to assign to bins (0-255)
+            price_bin_edges = bin_edges[coin]['price']
+            price_tokens = np.digitize(price_returns, price_bin_edges)
             
             tokens_dict[f"{coin}_price"] = price_tokens
             
@@ -271,11 +287,9 @@ class TokenizeBlock(PipelineBlock):
             volume_changes = np.log(volumes / volumes.shift(1))
             volume_changes = volume_changes.replace([np.inf, -np.inf], np.nan)
             
-            volume_tau_low, volume_tau_high = thresholds[coin]['volume']
-            volume_tokens = np.full(len(volume_changes), np.nan)
-            volume_tokens[volume_changes <= volume_tau_low] = 0  # down
-            volume_tokens[(volume_changes > volume_tau_low) & (volume_changes <= volume_tau_high)] = 1  # steady
-            volume_tokens[volume_changes > volume_tau_high] = 2  # up
+            # Use np.digitize to assign to bins (0-255)
+            volume_bin_edges = bin_edges[coin]['volume']
+            volume_tokens = np.digitize(volume_changes, volume_bin_edges)
             
             tokens_dict[f"{coin}_volume"] = volume_tokens
         
@@ -305,19 +319,21 @@ class TokenizeBlock(PipelineBlock):
         Returns:
             Dictionary {token: {train: ratio, val: ratio}}
         """
+        vocab_size = self.config['tokenization']['vocab_size']
+        
         def get_ratios(tokens_df):
             all_tokens = tokens_df.values.flatten()
             valid_tokens = all_tokens[~np.isnan(all_tokens)].astype(int)
             
             total = len(valid_tokens)
             if total == 0:
-                return {0: 0.0, 1: 0.0, 2: 0.0}
+                return {i: 0.0 for i in range(vocab_size)}
             
             unique, counts = np.unique(valid_tokens, return_counts=True)
             ratios = {int(token): float(count / total) for token, count in zip(unique, counts)}
             
-            # Ensure all tokens present
-            for token in [0, 1, 2]:
+            # Ensure all tokens present (0-255)
+            for token in range(vocab_size):
                 if token not in ratios:
                     ratios[token] = 0.0
             
@@ -326,9 +342,9 @@ class TokenizeBlock(PipelineBlock):
         train_ratios = get_ratios(train_tokens_df)
         val_ratios = get_ratios(val_tokens_df)
         
+        # Return distribution for all 256 bins
         return {
-            0: {'train': train_ratios[0], 'val': val_ratios[0]},
-            1: {'train': train_ratios[1], 'val': val_ratios[1]},
-            2: {'train': train_ratios[2], 'val': val_ratios[2]}
+            i: {'train': train_ratios[i], 'val': val_ratios[i]}
+            for i in range(vocab_size)
         }
 
