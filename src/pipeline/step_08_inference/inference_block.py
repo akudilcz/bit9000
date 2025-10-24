@@ -278,39 +278,32 @@ class InferenceBlock(PipelineBlock):
         
         return predictions, probabilities
     
-    def _format_results(self, predictions: np.ndarray, probabilities: np.ndarray,
-                       timestamp: datetime, target_coin: str, output_length: int) -> Dict:
-        """
-        Format predictions as JSON output
-        
-        Args:
-            predictions: Predicted tokens, shape (output_length,)
-            probabilities: Prediction probabilities, shape (output_length, 3)
-            timestamp: Current timestamp
-            target_coin: Target coin symbol
-            output_length: Number of prediction hours
-            
-        Returns:
-            Formatted results dictionary
-        """
-        labels = {0: "down", 1: "steady", 2: "up"}
+    def _format_results(self, predictions, probabilities, timestamp, target_coin, output_length):
+        """Format inference results with proper structure"""
+        # For 256-class, single-step prediction
+        # predictions: (output_length,) - token indices (0-255)
+        # probabilities: (vocab_size,) or (output_length, vocab_size) - softmax probabilities
         
         predictions_list = []
+        
+        # Handle both 1D and 2D probability shapes
+        if len(probabilities.shape) == 1:
+            # Single prediction: (256,)
+            probabilities_2d = probabilities.reshape(1, -1)
+        else:
+            # Multiple predictions: (output_length, 256)
+            probabilities_2d = probabilities
+        
         for h in range(output_length):
             pred_token = int(predictions[h])
-            pred_label = labels[pred_token]
-            confidence = float(probabilities[h, pred_token])
+            confidence = float(probabilities_2d[h, pred_token])
             
             predictions_list.append({
                 "hour": h + 1,
                 "timestamp": (timestamp + timedelta(hours=h+1)).isoformat(),
-                "prediction": pred_label,
+                "prediction": pred_token,  # 0-255 bin index
                 "confidence": confidence,
-                "probabilities": {
-                    "down": float(probabilities[h, 0]),
-                    "steady": float(probabilities[h, 1]),
-                    "up": float(probabilities[h, 2])
-                }
+                "probabilities": probabilities_2d[h].tolist()  # All 256 class probabilities
             })
         
         results = {
