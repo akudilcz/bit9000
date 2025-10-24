@@ -64,7 +64,7 @@ training:
   epochs: 100
   batch_size: 256  # Original: larger batches
   learning_rate: 0.00121801429078558  # Original
-  weight_decay: 0.0021025766948419896  # Original
+  weight_decay: 0.01  # INCREASED: from 0.0021 to 0.01 (5x stronger L2 regularization)
   label_smoothing: 3.2367826838699014e-05  # Original
   max_grad_norm: 0.8625800840715905  # Original
   num_workers: 0
