@@ -41,7 +41,7 @@ class HyperparameterTuner:
         val_y: torch.Tensor,
         output_dir: Path,
         num_trials: int = 30,
-        epochs_per_trial: int = 20,
+        epochs_per_trial: int = 50,
         timeout_hours: Optional[float] = None,
     ):
         """
@@ -202,6 +202,9 @@ class HyperparameterTuner:
 
             # Simple training loop (no full trainer for speed)
             best_val_loss = float("inf")
+            epochs_without_improvement = 0
+            early_stopping_patience = 5
+            min_delta = 0.0001
 
             for epoch in range(self.epochs_per_trial):
                 # Training
@@ -254,8 +257,11 @@ class HyperparameterTuner:
                 val_loss /= len(val_loader)
 
                 # Track best val loss
-                if val_loss < best_val_loss:
+                if val_loss < best_val_loss - min_delta:
                     best_val_loss = val_loss
+                    epochs_without_improvement = 0  # Reset counter
+                else:
+                    epochs_without_improvement += 1
 
                 # Report intermediate value for pruning
                 trial.report(val_loss, epoch)
@@ -271,6 +277,11 @@ class HyperparameterTuner:
                     f"Trial {trial.number} Epoch {epoch+1}/{self.epochs_per_trial}: "
                     f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}"
                 )
+
+                # Early stopping
+                if epochs_without_improvement >= early_stopping_patience:
+                    logger.info(f"Early stopping triggered at epoch {epoch+1} (no improvement for {early_stopping_patience} epochs, val_loss={val_loss:.4f})")
+                    break
 
             logger.info(
                 f"Trial {trial.number} completed with best_val_loss={best_val_loss:.4f}"
@@ -426,7 +437,7 @@ def run_tuning(
     val_y: torch.Tensor,
     output_dir: Path,
     num_trials: int = 30,
-    epochs_per_trial: int = 20,
+    epochs_per_trial: int = 50,
     timeout_hours: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
