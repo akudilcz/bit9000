@@ -55,11 +55,15 @@ The model uses a simple 8-step pipeline:
 ## Artifacts
 
 Pipeline outputs are saved to `artifacts/`:
-- `step_04_tokenize/`: Tokenized sequences + fitted thresholds
-- `step_05_sequences/`: PyTorch tensor sequences for training
-- `step_06_train/`: Trained model checkpoint + loss curves
-- `step_07_evaluate/`: Evaluation metrics + confusion matrices
-- `step_08_inference/`: Predictions with confidence scores
+- `step_00_reset/`: Artifact metadata from reset
+- `step_01_download/`: Raw OHLCV data (parquet files + visualizations)
+- `step_02_clean/`: Cleaned OHLCV data (gaps filled, quality metrics)
+- `step_03_split/`: Train/validation split data (temporal split at 80/20)
+- `step_04_tokenize/`: Tokenized sequences + fitted quantile thresholds
+- `step_05_sequences/`: PyTorch tensor sequences (train_X.pt, train_y.pt, val_X.pt, val_y.pt)
+- `step_06_train/`: Trained model checkpoint + training history and loss curves
+- `step_07_evaluate/`: Evaluation metrics, accuracy per hour, confusion matrices
+- `step_08_inference/`: Latest predictions with probabilities and confidence scores
 
 ## Development
 
