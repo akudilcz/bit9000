@@ -15,6 +15,26 @@ Design:
 - Single-step prediction during training (next 1 hour)
 - Autoregressive generation at inference time (generates 8 hours by predicting 1 at a time)
 - Teacher forcing during training
+
+============ DESIGN VERIFICATION ============
+✅ Vocabulary: 256 bins (0-255) - config['model']['vocab_size'] = 256
+✅ Input: (batch, 24, 10, 2) - 24h × 10 coins × 2 channels (price+volume)
+✅ Output: (batch, 256) - Single next-hour token prediction (256 classes)
+✅ Token Embeddings: Separate price_embedding(256→64) and volume_embedding(256→64)
+✅ Channel Fusion: Concatenate + Linear(128→256) to get d_model=256
+✅ Coin Aggregation: Mean pooling across 10 coins (dim=2)
+✅ Positional Encoding: Sinusoidal with max_len=32 (24+8 buffer)
+✅ Transformer Decoder: 4 layers, 4 heads, causal masking (tgt_mask upper triangular)
+✅ Prediction Head: Linear(256→256) for 256-class output
+✅ Training: Single BOS token (128) → predict next 1 token with teacher forcing
+✅ Inference: Autoregressive generation loop - slide window for 8 steps
+✅ Memory computation: Once per forward, reused across decoder steps
+✅ BOS token: Use bin 128 (middle of 256 range) as neutral starting point
+✅ Data shapes verified:
+   - train_X: (N, 24, 10, 2), dtype=long
+   - train_y: (N,), dtype=long (single token per sample)
+   - logits: (batch, vocab_size=256) for CrossEntropyLoss
+   - generated: (batch, max_length=8) for autoregressive inference
 """
 
 import torch
