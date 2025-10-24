@@ -201,7 +201,7 @@ class HyperparameterTuner:
             criterion = nn.CrossEntropyLoss(label_smoothing=params["label_smoothing"])
 
             # Simple training loop (no full trainer for speed)
-            best_val_loss = float("inf")
+            best_val_accuracy = 0.0
             epochs_without_improvement = 0
             early_stopping_patience = 10
             min_delta = 0.0001
@@ -238,8 +238,9 @@ class HyperparameterTuner:
 
                 train_loss /= len(train_loader)
 
-                # Validation
+                # Validation - use accuracy (label-smoothing agnostic)
                 model.eval()
+                val_accuracy = 0.0
                 val_loss = 0.0
                 with torch.no_grad():
                     for X_batch, y_batch in val_loader:
@@ -251,42 +252,50 @@ class HyperparameterTuner:
                             y_batch = y_batch.squeeze(-1)
 
                         logits = model(X_batch, targets=y_batch)  # (batch, 256)
+                        
+                        # Compute accuracy (label smoothing doesn't affect this)
+                        preds = torch.argmax(logits, dim=1)
+                        batch_acc = (preds == y_batch).float().mean().item()
+                        val_accuracy += batch_acc
+                        
+                        # Also track loss for logging
                         loss = criterion(logits, y_batch)
                         val_loss += loss.item()
 
+                val_accuracy /= len(val_loader)
                 val_loss /= len(val_loader)
 
-                # Track best val loss
-                if val_loss < best_val_loss - min_delta:
-                    best_val_loss = val_loss
+                # Track best val accuracy (NOT loss)
+                if val_accuracy > best_val_accuracy + min_delta:
+                    best_val_accuracy = val_accuracy
                     epochs_without_improvement = 0  # Reset counter
                 else:
                     epochs_without_improvement += 1
 
-                # Report intermediate value for pruning
-                trial.report(val_loss, epoch)
+                # Report intermediate value for pruning (use negative accuracy to minimize)
+                trial.report(-val_accuracy, epoch)
 
                 # Check if trial should be pruned
                 if trial.should_prune():
                     logger.info(
-                        f"Trial {trial.number} pruned at epoch {epoch} (val_loss={val_loss:.4f})"
+                        f"Trial {trial.number} pruned at epoch {epoch} (val_accuracy={val_accuracy:.4f})"
                     )
                     raise optuna.TrialPruned()
 
                 logger.info(
                     f"Trial {trial.number} Epoch {epoch+1}/{self.epochs_per_trial}: "
-                    f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}"
+                    f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_acc={val_accuracy:.4f}"
                 )
 
                 # Early stopping
                 if epochs_without_improvement >= early_stopping_patience:
-                    logger.info(f"Early stopping triggered at epoch {epoch+1} (no improvement for {early_stopping_patience} epochs, val_loss={val_loss:.4f})")
+                    logger.info(f"Early stopping triggered at epoch {epoch+1} (no improvement for {early_stopping_patience} epochs, val_acc={val_accuracy:.4f})")
                     break
 
             logger.info(
-                f"Trial {trial.number} completed with best_val_loss={best_val_loss:.4f}"
+                f"Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.4f}"
             )
-            return best_val_loss
+            return -best_val_accuracy  # Return negative accuracy (Optuna minimizes)
 
         except Exception as e:
             logger.error(f"Trial {trial.number} failed with error: {e}")
