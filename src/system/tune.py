@@ -100,7 +100,7 @@ class HyperparameterTuner:
         learning_rate = trial.suggest_float("learning_rate", 5e-6, 5e-3, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True)
         dropout = trial.suggest_float("dropout", 0.0, 0.5)
-        label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.1)
+        label_smoothing = trial.suggest_float("label_smoothing", 0.01, 0.08)
         max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 2.0)
         batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
 
