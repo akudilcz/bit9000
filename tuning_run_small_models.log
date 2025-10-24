@@ -1,0 +1,46 @@
+
+[TUNE] HYPERPARAMETER TUNING: Optimizing model hyperparameters...
+Missing 20 required config value(s):
+  - binning.lookback_hours
+  - binning.target_shift_hours
+  - binning.num_bins
+  - binning.method
+  - binning.quartiles
+  - binning.labels
+  - binning.feature_engineering_params
+  - binning.feature_engineering_params.epsilon
+  - binning.feature_engineering_params.max_ratio
+  - binning.feature_engineering_params.max_volume_ratio
+  - binning.feature_engineering_params.rsi_period
+  - binning.feature_engineering_params.rsi_min_periods
+  - binning.feature_engineering_params.rsi_default
+  - binning.feature_engineering_params.vol_window
+  - binning.feature_engineering_params.vol_min_periods
+  - binning.feature_engineering_params.momentum_4h
+  - binning.feature_engineering_params.momentum_24h
+  - model.num_target_coins
+  - model.features_per_coin
+  - model.sequence_length
+
+Please ensure all required config values are defined in config.yaml
+Loading sequences from artifacts\step_05_sequences...
+  Train: X=torch.Size([39455, 24, 10, 2]), y=torch.Size([39455, 1])
+  Val:   X=torch.Size([4295, 24, 10, 2]), y=torch.Size([4295, 1])
+
+Starting tuning with 50 trials, 15 epochs per trial...
+2025-10-24 15:10:23,998 - src.pipeline.io - INFO - Loaded train: X=torch.Size([39455, 24, 10, 2]), y=torch.Size([39455, 1])
+2025-10-24 15:10:23,998 - src.pipeline.io - INFO - Loaded val: X=torch.Size([4295, 24, 10, 2]), y=torch.Size([4295, 1])
+2025-10-24 15:10:24,010 - src.pipeline.io - INFO - Using device: cuda
+2025-10-24 15:10:24,010 - src.pipeline.io - INFO - Starting hyperparameter tuning with 50 trials
+2025-10-24 15:10:24,010 - src.pipeline.io - INFO - Each trial will train for 15 epochs
+[I 2025-10-24 15:10:24,010] A new study created in memory with name: no-name-b7d82682-abf3-4845-abb1-9754abde4752
+
+  0%|          | 0/50 [00:00<?, ?it/s]2025-10-24 15:10:24,012 - src.pipeline.io - INFO - Trial 0: Testing params {'learning_rate': 6.64645947158108e-05, 'weight_decay': 0.005669849511478858, 'dropout': 0.36599697090570255, 'label_smoothing': 0.05986584841970366, 'max_grad_norm': 0.7340279606636548, 'batch_size': 128, 'embedding_dim': 16, 'd_model': 64, 'num_layers': 2, 'num_heads': 8, 'feedforward_dim': 1024, 'warmup_epochs': 1}
+2025-10-24 15:10:24,020 - src.pipeline.io - INFO - Initialized SimpleTokenPredictor with 362,752 parameters
+2025-10-24 15:10:24,020 - src.pipeline.io - INFO -   Input: 24 hours Î 10 coins Î 2 channels
+2025-10-24 15:10:24,020 - src.pipeline.io - INFO -   Output: 1 hour (next hour prediction, autoregressively generated to 8 hours)
+2025-10-24 15:10:24,020 - src.pipeline.io - INFO -   Vocab: 256 bins (0-255 for continuous quantization)
+2025-10-24 15:10:24,020 - src.pipeline.io - INFO -   Model dim: 64, Heads: 8, Layers: 2
+2025-10-24 15:10:27,684 - src.pipeline.io - INFO - Trial 0 Epoch 1/15: train_loss=3.2104, val_loss=1.8838
+2025-10-24 15:10:30,393 - src.pipeline.io - INFO - Trial 0 Epoch 2/15: train_loss=1.7572, val_loss=1.5865
+2025-10-24 15:10:32,975 - src.pipeline.io - INFO - Trial 0 Epoch 3/15: train_loss=1.6029, val_loss=1.5873
