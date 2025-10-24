@@ -51,22 +51,22 @@ model:
   vocab_size: 256  # 256-bin vocabulary for continuous quantization
   num_classes: 256  # 256-class classification
   num_coins: 10  # Number of coins (BTC, ETH, BNB, XRP, SOL, DOGE, ADA, AVAX, DOT, LTC)
-  embedding_dim: 64  # Token embedding dimension (separate for price + volume)
-  d_model: 256  # Hidden dimension after channel fusion (embedding_dim * 2 for 2 channels)
-  num_heads: 4  # Number of attention heads (must divide d_model)
-  num_layers: 4  # Number of transformer decoder layers
-  feedforward_dim: 512  # Feedforward dimension (2x d_model)
-  dropout: 0.1  # Dropout rate
+  embedding_dim: 32  # TUNED: from 64 -> 32 (more efficient)
+  d_model: 128  # TUNED: from 256 -> 128 (embedding_dim * 4 = 32 * 4)
+  num_heads: 4  # TUNED: kept at 4 (divides 128 evenly)
+  num_layers: 2  # TUNED: from 4 -> 2 (shallower is better)
+  feedforward_dim: 256  # TUNED: from 512 -> 256
+  dropout: 0.11071062737382537  # TUNED: from 0.1 -> 0.1107 (slight increase)
 
 # Training configuration
 training:
   device: cuda
   epochs: 100
-  batch_size: 256
-  learning_rate: 0.0001  # 1e-4
-  weight_decay: 0.00001  # 1e-5
-  label_smoothing: 0.0  # Label smoothing for calibration (0.0-0.2 range)
-  max_grad_norm: 1.0  # Gradient clipping
+  batch_size: 256  # TUNED: kept at 256 (good for convergence)
+  learning_rate: 0.00121801429078558  # TUNED: from 0.0001 -> 0.001218 (~12x higher!)
+  weight_decay: 0.0021025766948419896  # TUNED: from 0.00001 -> 0.0021 (~200x higher!)
+  label_smoothing: 3.2367826838699014e-05  # TUNED: from 0.0 -> 0.0000324 (tiny, basically off)
+  max_grad_norm: 0.8625800840715905  # TUNED: from 1.0 -> 0.8626 (slightly tighter clipping)
   num_workers: 0
   early_stopping:
     enabled: true
@@ -74,7 +74,7 @@ training:
     min_delta: 0.0001
   warmup:
     enabled: true
-    epochs: 5
+    epochs: 3  # TUNED: from 5 -> 3 (shorter warmup)
     start_lr: 0.0000001  # 1e-7
   scheduler:
     enabled: true
