@@ -99,20 +99,20 @@ class HyperparameterTuner:
         # Training hyperparameters
         learning_rate = trial.suggest_float("learning_rate", 5e-6, 5e-3, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True)
-        dropout = trial.suggest_float("dropout", 0.0, 0.5)  # EXPANDED: 0.05 to 0.3 -> 0.0 to 0.5
+        dropout = trial.suggest_float("dropout", 0.0, 0.5)
         label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.1)
         max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 2.0)
-        batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])  # EXPANDED: added 32 and 512
+        batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
 
-        # Architecture hyperparameters
-        embedding_dim = trial.suggest_categorical("embedding_dim", [16, 32, 64, 128, 256])  # EXPANDED: added 16 and 256
-        num_layers = trial.suggest_int("num_layers", 2, 6)
-        num_heads = trial.suggest_categorical("num_heads", [2, 4, 8])  # EXPANDED: added 2
+        # Architecture hyperparameters - EXPANDED to include MUCH smaller models
+        embedding_dim = trial.suggest_categorical("embedding_dim", [8, 16, 32, 64, 128, 256])  # EXPANDED: added 8 (tiny)
+        num_layers = trial.suggest_int("num_layers", 1, 6)  # EXPANDED: down to 1 layer (ultra-compact)
+        num_heads = trial.suggest_categorical("num_heads", [1, 2, 4, 8])  # EXPANDED: added 1 (single head)
         feedforward_dim = trial.suggest_categorical(
-            "feedforward_dim", [256, 512, 1024]
+            "feedforward_dim", [64, 128, 256, 512, 1024]  # EXPANDED: down to 64 (very small)
         )
 
-        # Model dimension = embedding_dim * 2 (after channel fusion of price + volume)
+        # Model dimension = embedding_dim * 4 (after channel fusion of price + volume)
         d_model = embedding_dim * 4  # 2 channels * 2x scaling
 
         # Ensure d_model is divisible by num_heads
@@ -120,7 +120,7 @@ class HyperparameterTuner:
             d_model += 1
 
         # Warmup epochs
-        warmup_epochs = trial.suggest_int("warmup_epochs", 2, 5)
+        warmup_epochs = trial.suggest_int("warmup_epochs", 1, 5)  # EXPANDED: down to 1 epoch
 
         return {
             "learning_rate": learning_rate,
