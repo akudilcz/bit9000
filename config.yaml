@@ -51,13 +51,13 @@ model:
   vocab_size: 256  # 256-bin vocabulary for continuous quantization
   num_classes: 256  # 256-class classification
   num_coins: 10  # Number of coins (BTC, ETH, BNB, XRP, SOL, DOGE, ADA, AVAX, DOT, LTC)
-  embedding_dim: 32  # Original: smaller, efficient
-  d_model: 128  # Original: embedding_dim * 4 = 32 * 4
-  num_heads: 4  # Original: 4 heads works well
-  num_layers: 2  # Original: 2 layers (shallower is better)
-  feedforward_dim: 256  # Original
-  dropout: 0.11071062737382537  # Original
-  stochastic_depth: 0.1  # NEW: Randomly skip residual connections (drop_prob per layer)
+  embedding_dim: 256  # Best from tuning: large model performs better on 256-class task
+  d_model: 1024  # Best from tuning: embedding_dim * 4 = 256 * 4
+  num_heads: 8  # Best from tuning: more heads for better attention
+  num_layers: 5  # Best from tuning: deeper model
+  feedforward_dim: 1024  # Best from tuning: larger feedforward
+  dropout: 0.3198300688289384  # Best from tuning
+  stochastic_depth: 0.0  # Disabled for now (caused device issues)
 
 # Training configuration
 training:
