@@ -207,6 +207,10 @@ class HyperparameterTuner:
                 for X_batch, y_batch in train_loader:
                     X_batch = X_batch.to(self.device)
                     y_batch = y_batch.to(self.device)
+                    
+                    # Squeeze y_batch if it has shape (N, 1) -> (N,)
+                    if len(y_batch.shape) > 1:
+                        y_batch = y_batch.squeeze(-1)
 
                     optimizer.zero_grad()
                     
@@ -235,6 +239,10 @@ class HyperparameterTuner:
                     for X_batch, y_batch in val_loader:
                         X_batch = X_batch.to(self.device)
                         y_batch = y_batch.to(self.device)
+                        
+                        # Squeeze y_batch if it has shape (N, 1) -> (N,)
+                        if len(y_batch.shape) > 1:
+                            y_batch = y_batch.squeeze(-1)
 
                         logits = model(X_batch, targets=y_batch)  # (batch, 256)
                         loss = criterion(logits, y_batch)
