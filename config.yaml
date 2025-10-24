@@ -63,12 +63,12 @@ model:
 training:
   device: cuda
   epochs: 100
-  batch_size: 256  # Original: larger batches
-  learning_rate: 0.00121801429078558  # Original
-  weight_decay: 0.01  # INCREASED: from 0.0021 to 0.01 (5x stronger L2 regularization)
-  label_smoothing: 3.2367826838699014e-05  # Original
-  max_grad_norm: 0.8625800840715905  # Original
-  gaussian_noise: 0.05  # Input Gaussian noise scale for regularization
+  batch_size: 512  # Best from tuning: larger batches
+  learning_rate: 2.2582412051102675e-05  # Best from tuning
+  weight_decay: 1.0973519173394105e-05  # Best from tuning
+  label_smoothing: 0.009577463910373753  # Best from tuning
+  max_grad_norm: 1.4853855763047719  # Best from tuning
+  gaussian_noise: 0.07787884922761708  # Best from tuning: input Gaussian noise scale for regularization
   num_workers: 0
   early_stopping:
     enabled: true
@@ -76,7 +76,7 @@ training:
     min_delta: 0.0001
   warmup:
     enabled: true
-    epochs: 3  # Original
+    epochs: 2  # Best from tuning: reduced warmup
     start_lr: 0.0000001  # 1e-7
   scheduler:
     enabled: true
