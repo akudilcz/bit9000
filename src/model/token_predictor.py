@@ -56,6 +56,7 @@ class StochasticDepth(nn.Module):
     def __init__(self, drop_prob: float = 0.1):
         super().__init__()
         self.drop_prob = drop_prob
+        self.register_buffer("_dummy_buffer", torch.zeros(1))  # For device tracking
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.training or self.drop_prob == 0:
@@ -64,7 +65,8 @@ class StochasticDepth(nn.Module):
         # Random keep probability per batch element
         keep_prob = 1 - self.drop_prob
         shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-        random_tensor = torch.bernoulli(torch.full(shape, keep_prob, device=x.device))
+        device = x.device  # Get device from input tensor
+        random_tensor = torch.bernoulli(torch.full(shape, keep_prob, device=device))
         
         # Scale by keep probability to maintain expected value
         if keep_prob > 0:
