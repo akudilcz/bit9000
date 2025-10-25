@@ -120,13 +120,14 @@ class TrainBlock(PipelineBlock):
         
         # Check if using binary classification
         binary_classification = self.config['model'].get('binary_classification', False)
+        multi_horizon_enabled = self.config['model'].get('multi_horizon_enabled', True)
         if binary_classification:
             pos_weight = self.config['training'].get('pos_weight', 5.7)
             # For binary classification with 2-class output, use weighted CrossEntropyLoss
             # Create class weights: [1.0, pos_weight] to upweight class 1 (BUY)
             class_weights = torch.tensor([1.0, pos_weight], device=device)
             criterion = nn.CrossEntropyLoss(weight=class_weights)
-            logger.info(f"  Using binary classification with class weights=[1.0, {pos_weight}]")
+            logger.info(f"  Using binary classification with class weights=[1.0, {pos_weight}], multi_horizon={multi_horizon_enabled}")
         else:
             logger.info(f"  Using multi-class classification ({self.config['model'].get('num_classes', 256)} classes)")
         
@@ -279,6 +280,7 @@ class TrainBlock(PipelineBlock):
         # Check if model is multi-horizon (V4) and binary classification
         is_multi_horizon = hasattr(model, 'horizon_heads')
         binary_classification = self.config['model'].get('binary_classification', False)
+        multi_horizon_enabled = self.config['model'].get('multi_horizon_enabled', True)
         
         # Create progress bar
         pbar = tqdm(data_loader, desc='Training', leave=False, ncols=100)
@@ -305,7 +307,7 @@ class TrainBlock(PipelineBlock):
             outputs = model(X_batch_noisy)
             
             # Handle multi-horizon (V4) vs single horizon (V1/V2/V3)
-            if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
+            if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs and multi_horizon_enabled:
                 # Multi-horizon V4: weight by horizon difficulty
                 # Shorter horizons are typically harder to predict
                 horizon_weights = [1.0, 0.8, 0.6, 0.4]  # 1h: hardest, 8h: easiest
@@ -337,6 +339,17 @@ class TrainBlock(PipelineBlock):
                 # Normalize by sum of weights (not 4.0)
                 loss = loss / sum(horizon_weights)
                 batch_acc = all_correct / all_samples
+            elif is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs and not multi_horizon_enabled:
+                # Single-horizon V4: only 1h head
+                logits = outputs['horizon_1h']['logits']  # (B, 2 or num_classes)
+                y_target = y_batch if y_batch.dim() == 1 else y_batch.squeeze(-1)
+                loss = criterion(logits, y_target.long())
+                predictions = torch.argmax(logits, dim=-1)
+                batch_correct = (predictions == y_target).sum().item()
+                batch_samples = y_target.numel()
+                batch_acc = batch_correct / batch_samples
+                total_correct += batch_correct
+                total_samples += batch_samples
                 
             elif isinstance(outputs, dict):
                 # Single horizon V3
@@ -375,8 +388,8 @@ class TrainBlock(PipelineBlock):
             loss.backward()
             optimizer.step()
             
-            # For multi-horizon, track metrics
-            if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
+            # For multi-horizon only, track metrics (single-horizon already tracked in its branch)
+            if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs and multi_horizon_enabled:
                 total_correct += all_correct
                 total_samples += all_samples
             
@@ -417,7 +430,7 @@ class TrainBlock(PipelineBlock):
                 outputs = model(X_batch)
                 
                 # Handle multi-horizon (V4) vs single horizon (V1/V2/V3)
-                if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
+                if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs and multi_horizon_enabled:
                     # Multi-horizon V4: weight by horizon difficulty
                     horizon_weights = [1.0, 0.8, 0.6, 0.4]  # 1h: hardest, 8h: easiest
                     loss = 0
@@ -446,18 +459,29 @@ class TrainBlock(PipelineBlock):
                     total_correct += all_correct
                     total_samples += all_samples
 
-                    # For binary classification, also compute BUY precision using voting
+                elif is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs and not multi_horizon_enabled:
+                    # Single-horizon V4: only 1h head
+                    logits = outputs['horizon_1h']['logits']
+                    y_target = y_batch if y_batch.dim() == 1 else y_batch.squeeze(-1)
+                    loss = criterion(logits, y_target.long())
+                    predictions = torch.argmax(logits, dim=-1)
+                    batch_correct = (predictions == y_target).sum().item()
+                    batch_samples = y_target.numel()
+                    batch_acc = batch_correct / batch_samples
+                    total_correct += batch_correct
+                    total_samples += batch_samples
+
+                    # For binary classification, compute BUY precision using threshold
                     if binary_classification:
-                        voting_strategy = self.config['inference'].get('voting_strategy', 'weighted')
-                        threshold = self.config['inference'].get('voting_threshold', 0.70)
-                        min_agree = self.config['inference'].get('min_horizons_agree', 3)
+                        # Convert logits to probabilities for class 1 (BUY)
+                        prob_dist = torch.softmax(logits, dim=-1)
+                        buy_probs = prob_dist[:, 1]
+                        threshold = self.config['inference'].get('single_threshold', 0.70)
+                        buy_signals = (buy_probs > threshold).long()
 
-                        # Get final BUY signals using multi-horizon voting
-                        buy_signals = self.inference_vote(outputs, voting_strategy, threshold, min_agree)
-
-                        # Collect for precision calculation (use first horizon's targets as representative)
-                        buy_predictions.extend(buy_signals.cpu().numpy())
-                        buy_targets.extend(y_batch[:, 0].cpu().numpy())  # Use 1h horizon as representative
+                        # Collect for precision calculation
+                        buy_predictions.extend(buy_signals.detach().cpu().numpy())
+                        buy_targets.extend(y_target.detach().cpu().numpy())
                     
                 elif isinstance(outputs, dict):
                     # Single horizon V3

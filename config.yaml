@@ -53,7 +53,7 @@ tokenization:
 # =============================================================================
 sequences:
   input_length: 48   # 48 hours (2 days) of historical context - increased for better trend detection
-  output_length: 8   # Predict 8 hours ahead
+  output_length: 1   # Predict 1 hour ahead (single-horizon BUY decision)
   num_channels: 5    # 0=price, 1=volume, 2=rsi, 3=macd, 4=bb_position
 
 # =============================================================================
@@ -83,7 +83,7 @@ model:
   max_seq_len: 1024          # Max sequence length (48h × 4 coins × 5 channels = 960)
   
   # V4 Specific Features
-  multi_horizon_enabled: true  # Enable 1h, 2h, 4h, 8h predictions
+  multi_horizon_enabled: false  # Disable multi-horizon; use single 1h prediction
   btc_attention_enabled: true  # Enable BTC→XRP dedicated attention pathway
   time_features_enabled: true  # Enable cyclical time encoding (hour, day of week)
   
@@ -154,7 +154,10 @@ inference:
   num_steps: 8                 # Number of autoregressive prediction steps
   sampling: argmax             # Sampling strategy: 'argmax' or 'sample'
   
-  # NEW: Multi-horizon voting for binary BUY classification
+  # Single-horizon binary BUY decision
+  single_threshold: 0.70       # Probability threshold for BUY in single-horizon mode
+  
+  # (Kept for compatibility if multi-horizon is re-enabled)
   voting_strategy: weighted    # 'strict', 'majority', 'weighted', 'confidence_and'
   voting_threshold: 0.70       # Confidence threshold for weighted/confidence_and strategies
   min_horizons_agree: 3        # Minimum horizons that must agree for majority/confidence_and

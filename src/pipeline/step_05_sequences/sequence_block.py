@@ -250,25 +250,19 @@ class SequenceBlock(PipelineBlock):
         # Pre-allocate arrays
         X = np.zeros((num_samples, input_length, num_coins, num_channels), dtype=np.int64)
         
-        # Multi-horizon targets: 1h, 2h, 4h, 8h ahead
+        # Targets: single-horizon 1h ahead (binary BUY/NO-BUY)
         y_1h = np.zeros(num_samples, dtype=np.int64)
-        y_2h = np.zeros(num_samples, dtype=np.int64)
-        y_4h = np.zeros(num_samples, dtype=np.int64)
-        y_8h = np.zeros(num_samples, dtype=np.int64)
         
         # Create windows using vectorized slicing
         for i in range(num_samples):
             # Input window: all coins, all channels (including target coin)
             X[i] = tokens_array[i:i+input_length, :, :]
             
-            # Multi-horizon outputs: predict at 1h, 2h, 4h, 8h after input window
+            # Single-horizon output: predict at 1h after input window
             y_1h[i] = tokens_array[i+input_length, target_coin_idx, 0]  # 1 hour ahead
-            y_2h[i] = tokens_array[i+input_length+1, target_coin_idx, 0]  # 2 hours ahead
-            y_4h[i] = tokens_array[i+input_length+3, target_coin_idx, 0]  # 4 hours ahead  
-            y_8h[i] = tokens_array[i+input_length+7, target_coin_idx, 0]  # 8 hours ahead
         
-        # Stack all horizons: (num_samples, 4)
-        y_multi = np.stack([y_1h, y_2h, y_4h, y_8h], axis=1)
+        # Single horizon array: (num_samples,)
+        y_single = y_1h
         
         # Convert 256-bin targets to either 3-class or 2-class (binary) labels
         num_classes = self.config['model'].get('num_classes', 256)
@@ -277,43 +271,39 @@ class SequenceBlock(PipelineBlock):
         
         if binary_classification:
             # Binary classification: BUY if token >= threshold, else NO-BUY
-            y_binary = np.zeros_like(y_multi, dtype=np.int64)
-            y_binary[y_multi >= buy_token_threshold] = 1  # BUY
-            y_binary[y_multi < buy_token_threshold] = 0   # NO-BUY
+            y_binary = np.zeros_like(y_single, dtype=np.int64)
+            y_binary[y_single >= buy_token_threshold] = 1  # BUY
+            y_binary[y_single < buy_token_threshold] = 0   # NO-BUY
             y = y_binary
             
-            # Log binary class distribution for each horizon
-            for horizon_idx, horizon_name in enumerate(['1h', '2h', '4h', '8h']):
-                y_horizon = y[:, horizon_idx]
-                class_counts = np.bincount(y_horizon.flatten())
-                total_samples = y_horizon.size
-                buy_count = class_counts[1] if len(class_counts) > 1 else 0
-                no_buy_count = class_counts[0] if len(class_counts) > 0 else 0
-                logger.info(f"    {horizon_name} horizon - Binary distribution:")
-                logger.info(f"      Class 0 (NO-BUY): {no_buy_count:,} ({100*no_buy_count/total_samples:.1f}%)")
-                logger.info(f"      Class 1 (BUY): {buy_count:,} ({100*buy_count/total_samples:.1f}%)")
+            # Log binary class distribution
+            class_counts = np.bincount(y.flatten())
+            total_samples = y.size
+            buy_count = class_counts[1] if len(class_counts) > 1 else 0
+            no_buy_count = class_counts[0] if len(class_counts) > 0 else 0
+            logger.info(f"    1h horizon - Binary distribution:")
+            logger.info(f"      Class 0 (NO-BUY): {no_buy_count:,} ({100*no_buy_count/total_samples:.1f}%)")
+            logger.info(f"      Class 1 (BUY): {buy_count:,} ({100*buy_count/total_samples:.1f}%)")
         elif num_classes == 3:
             # More balanced thresholds (adjust based on actual token distribution):
             # Class 0 (negative): tokens 0-99 (bottom ~39%)
             # Class 1 (level): tokens 100-155 (middle ~22%) 
             # Class 2 (positive): tokens 156-255 (top ~39%)
-            y_multi_3class = np.zeros_like(y_multi, dtype=np.int64)
-            y_multi_3class[y_multi < 100] = 0      # negative
-            y_multi_3class[(y_multi >= 100) & (y_multi < 156)] = 1  # level
-            y_multi_3class[y_multi >= 156] = 2    # positive
-            y = y_multi_3class
+            y_3class = np.zeros_like(y_single, dtype=np.int64)
+            y_3class[y_single < 100] = 0      # negative
+            y_3class[(y_single >= 100) & (y_single < 156)] = 1  # level
+            y_3class[y_single >= 156] = 2    # positive
+            y = y_3class
             
-            # Log class distribution for each horizon
-            for horizon_idx, horizon_name in enumerate(['1h', '2h', '4h', '8h']):
-                y_horizon = y[:, horizon_idx]
-                class_counts = np.bincount(y_horizon.flatten())
-                total_samples = y_horizon.size
-                logger.info(f"    {horizon_name} horizon - Class distribution:")
-                logger.info(f"      Class 0 (negative): {class_counts[0]:,} ({100*class_counts[0]/total_samples:.1f}%)")
-                logger.info(f"      Class 1 (level): {class_counts[1]:,} ({100*class_counts[1]/total_samples:.1f}%)")
-                logger.info(f"      Class 2 (positive): {class_counts[2]:,} ({100*class_counts[2]/total_samples:.1f}%)")
+            # Log class distribution
+            class_counts = np.bincount(y.flatten())
+            total_samples = y.size
+            logger.info(f"    1h horizon - Class distribution:")
+            logger.info(f"      Class 0 (negative): {class_counts[0]:,} ({100*class_counts[0]/total_samples:.1f}%)")
+            logger.info(f"      Class 1 (level): {class_counts[1]:,} ({100*class_counts[1]/total_samples:.1f}%)")
+            logger.info(f"      Class 2 (positive): {class_counts[2]:,} ({100*class_counts[2]/total_samples:.1f}%)")
         else:
-            y = y_multi
+            y = y_single
         
         # Verify no NaNs
         if np.isnan(X).any() or np.isnan(y).any():

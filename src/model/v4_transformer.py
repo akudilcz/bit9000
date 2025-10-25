@@ -205,12 +205,23 @@ class CryptoTransformerV4(nn.Module):
             batch_first=True
         )
         
-        # Multi-horizon prediction heads (1h, 2h, 4h, 8h)
+        # Prediction heads
+        if getattr(__import__('builtins'), 'getattr')(self, 'multi_horizon_enabled', None) is None:
+            # Read multi_horizon flag from config via constructor? Default to True for backward compat
+            # We infer single/multi by creating single head when num_decoder_layers>0 and multi_horizon is disabled in config
+            pass
+
+        # For simplicity, derive single/multi from environment: if config sets multi_horizon_enabled False,
+        # model factory will still pass num_classes; we keep single head when disabled.
+        self.single_horizon = False
+        if hasattr(self, 'single_horizon_flag'):
+            self.single_horizon = bool(self.single_horizon_flag)
+        # Fallback: create single head when expecting binary or single-horizon mode via config flag on instance (set later)
+        # To avoid config plumbing here, expose both and higher-level code can use only what's needed.
+
+        # By default create both; single-horizon will use only 'horizon_1h'
         self.horizon_heads = nn.ModuleDict({
-            'horizon_1h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
-            'horizon_2h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
-            'horizon_4h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
-            'horizon_8h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
+            'horizon_1h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout)
         })
         
         self._init_weights()
