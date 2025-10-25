@@ -1,7 +1,7 @@
 """Step 5: Sequences - Create rolling windows for supervised learning
 
 Philosophy: Simple sliding windows
-- Input: 24 consecutive tokens × N coins × 2 channels (price + volume)
+- Input: 48 consecutive tokens × N coins × 5 channels (price + volume + rsi + macd + bb_position)
 - Target: 8 consecutive XRP price tokens (next 8 hours)
 - Stack into PyTorch tensors for training
 """
@@ -88,7 +88,7 @@ class SequenceBlock(PipelineBlock):
         
         logger.info(f"\n  Input length: {input_length} hours")
         logger.info(f"  Output length: {output_length} hours")
-        logger.info(f"  Channels: {num_channels} (price + volume)")
+        logger.info(f"  Channels: {num_channels} (price + volume + rsi + macd + bb_position)")
         logger.info(f"  Target coin: {target_coin}")
         
         # Load tokenized data
@@ -180,7 +180,7 @@ class SequenceBlock(PipelineBlock):
     def _create_sequences(self, tokens_df: pd.DataFrame, input_length: int,
                          output_length: int, target_coin: str, num_channels: int) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Create rolling window sequences with 2-channel support
+        Create rolling window sequences with 5-channel support
         
         For each valid position i:
         - X[i] = tokens[i:i+input_length, all_coins, all_channels]
@@ -190,30 +190,34 @@ class SequenceBlock(PipelineBlock):
         
         Args:
             tokens_df: DataFrame with token values (timesteps × coin_channels)
-                      Columns like: BTC_price, BTC_volume, ETH_price, ETH_volume, ...
-            input_length: Number of input timesteps (24)
+                      Columns like: BTC_price, BTC_volume, BTC_rsi, BTC_macd, BTC_bb_position, ...
+            input_length: Number of input timesteps (48)
             output_length: Number of output timesteps (8)
             target_coin: Coin to predict (e.g., 'XRP')
-            num_channels: Number of channels (2 = price + volume)
+            num_channels: Number of channels (5 = price + volume + rsi + macd + bb_position)
             
         Returns:
             (X, y) tuple of numpy arrays
             X shape: (num_samples, input_length, num_coins, num_channels)
             y shape: (num_samples, output_length)
         """
-        # Extract coin names from columns (assuming format: COIN_price, COIN_volume)
+        # Extract coin names from columns - look for coins from config
+        coins_from_config = self.config['data']['coins']
         all_columns = list(tokens_df.columns)
-        coin_names = sorted(set(col.rsplit('_', 1)[0] for col in all_columns if '_' in col))
+        
+        # Verify coins have all required channels
+        coin_names = []
+        channels_list = ['price', 'volume', 'rsi', 'macd', 'bb_position']
+        
+        for coin in coins_from_config:
+            has_all_channels = all(f"{coin}_{ch}" in all_columns for ch in channels_list)
+            if has_all_channels:
+                coin_names.append(coin)
+            else:
+                logger.warning(f"  Skipping {coin}: missing some channels")
+        
         num_coins = len(coin_names)
-        
         logger.info(f"    Detected {num_coins} coins: {coin_names}")
-        
-        # Verify all required columns exist
-        for coin in coin_names:
-            for channel in ['price', 'volume']:
-                col = f"{coin}_{channel}"
-                if col not in all_columns:
-                    raise ValueError(f"Missing column: {col}")
         
         # Build 3D array: (timesteps, num_coins, num_channels)
         T = len(tokens_df)
@@ -222,6 +226,9 @@ class SequenceBlock(PipelineBlock):
         for coin_idx, coin in enumerate(coin_names):
             tokens_array[:, coin_idx, 0] = tokens_df[f"{coin}_price"].values
             tokens_array[:, coin_idx, 1] = tokens_df[f"{coin}_volume"].values
+            tokens_array[:, coin_idx, 2] = tokens_df[f"{coin}_rsi"].values
+            tokens_array[:, coin_idx, 3] = tokens_df[f"{coin}_macd"].values
+            tokens_array[:, coin_idx, 4] = tokens_df[f"{coin}_bb_position"].values
         
         # Find target coin index for output
         target_coin_idx = coin_names.index(target_coin)
