@@ -233,11 +233,14 @@ class TrainBlock(PipelineBlock):
         return artifact
     
     def _train_epoch(self, model, data_loader, criterion, optimizer, device):
-        """Train for one epoch using teacher forcing with correct shifting"""
+        """Train for one epoch with multi-horizon prediction support"""
         model.train()
         total_loss = 0
         total_correct = 0
         total_samples = 0
+        
+        # Check if model is multi-horizon (V4)
+        is_multi_horizon = hasattr(model, 'horizon_heads')
         
         # Create progress bar
         pbar = tqdm(data_loader, desc='Training', leave=False, ncols=100)
@@ -246,16 +249,14 @@ class TrainBlock(PipelineBlock):
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
             
-            # Add Gaussian noise to input during training (helps escape local minima)
-            # Convert to float, add noise, round and clamp to valid token range
+            # Add Gaussian noise to input during training
             if model.training:
                 noise_scale = self.config['training'].get('gaussian_noise', 0.0)
                 if noise_scale > 0:
                     vocab_size = self.config['model']['vocab_size']
-                    X_float = X_batch.float()  # Convert to float for noise addition
+                    X_float = X_batch.float()
                     noise = torch.randn_like(X_float) * noise_scale
                     X_noisy = X_float + noise
-                    # Round to nearest integer and clamp to valid token range [0, vocab_size-1]
                     X_batch_noisy = torch.clamp(torch.round(X_noisy), 0, vocab_size - 1).long()
                 else:
                     X_batch_noisy = X_batch
@@ -263,46 +264,76 @@ class TrainBlock(PipelineBlock):
                 X_batch_noisy = X_batch
             
             optimizer.zero_grad()
-            # Forward pass with correct teacher forcing (model handles shifting)
-            outputs = model(X_batch_noisy)  # V1/V2: tensor, V3: dict
+            outputs = model(X_batch_noisy)
             
-            # Handle V3 (dict) vs V1/V2 (tensor) outputs
-            if isinstance(outputs, dict):
-                logits = outputs['logits']  # V3: extract logits from dict
-            else:
-                logits = outputs  # V1/V2: already logits
-
-            # Handle both old (B, T, C) and new (B, C) output shapes
-            if len(logits.shape) == 3:
-                # Old format: (B, T, C) - reshape for loss
-                B, T, C = logits.shape
-                logits_flat = logits.view(B * T, C)
-                y_flat = y_batch.view(B * T)
-            else:
-                # New format: (B, vocab_size) for single-step prediction
-                logits_flat = logits  # (B, vocab_size)
-                # Handle both (B,) and (B, 1) target shapes
+            # Handle multi-horizon (V4) vs single horizon (V1/V2/V3)
+            if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
+                # Multi-horizon V4: combine losses from all horizons
+                loss = 0
+                all_correct = 0
+                all_samples = 0
+                
+                # y_batch shape: (B, 4) for 4 horizons
+                for idx, horizon in enumerate(['horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h']):
+                    logits = outputs[horizon]['logits']  # (B, num_classes)
+                    y_horizon = y_batch[:, idx]  # (B,)
+                    
+                    # Compute loss for this horizon
+                    horizon_loss = criterion(logits, y_horizon)
+                    loss += horizon_loss
+                    
+                    # Metrics
+                    predictions = torch.argmax(logits, dim=-1)
+                    all_correct += (predictions == y_horizon).sum().item()
+                    all_samples += y_horizon.numel()
+                
+                # Average loss across horizons
+                loss = loss / 4.0
+                batch_acc = all_correct / all_samples
+                
+            elif isinstance(outputs, dict):
+                # Single horizon V3
+                logits = outputs['logits']
+                logits_flat = logits
                 if len(y_batch.shape) > 1:
-                    y_flat = y_batch.squeeze(-1)  # (B,)
+                    y_flat = y_batch.squeeze(-1)
                 else:
-                    y_flat = y_batch  # Already (B,)
-
-            # Compute loss
-            loss = criterion(logits_flat, y_flat)
+                    y_flat = y_batch
+                loss = criterion(logits_flat, y_flat)
+                predictions = torch.argmax(logits_flat, dim=-1)
+                batch_correct = (predictions == y_flat).sum().item()
+                batch_samples = y_flat.numel()
+                batch_acc = batch_correct / batch_samples
+                total_correct += batch_correct
+                total_samples += batch_samples
+            else:
+                # V1/V2
+                logits = outputs
+                if len(logits.shape) == 3:
+                    B, T, C = logits.shape
+                    logits_flat = logits.view(B * T, C)
+                    y_flat = y_batch.view(B * T)
+                else:
+                    logits_flat = logits
+                    y_flat = y_batch.squeeze(-1) if len(y_batch.shape) > 1 else y_batch
+                loss = criterion(logits_flat, y_flat)
+                predictions = torch.argmax(logits_flat, dim=-1)
+                batch_correct = (predictions == y_flat).sum().item()
+                batch_samples = y_flat.numel()
+                batch_acc = batch_correct / batch_samples
+                total_correct += batch_correct
+                total_samples += batch_samples
 
             # Backward pass
             loss.backward()
             optimizer.step()
             
-            # Metrics
-            predictions = torch.argmax(logits_flat, dim=-1)
-            batch_correct = (predictions == y_flat).sum().item()
-            batch_samples = y_flat.numel()
-            batch_acc = batch_correct / batch_samples
+            # For multi-horizon, track metrics
+            if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
+                total_correct += all_correct
+                total_samples += all_samples
             
             total_loss += loss.item() * X_batch.size(0)
-            total_correct += batch_correct
-            total_samples += batch_samples
             
             # Update progress bar
             pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_acc:.4f}'})
@@ -313,11 +344,14 @@ class TrainBlock(PipelineBlock):
         return avg_loss, avg_acc
     
     def _validate_epoch(self, model, data_loader, criterion, device):
-        """Validate for one epoch"""
+        """Validate for one epoch with multi-horizon support"""
         model.eval()
         total_loss = 0
         total_correct = 0
         total_samples = 0
+        
+        # Check if model is multi-horizon (V4)
+        is_multi_horizon = hasattr(model, 'horizon_heads')
         
         # Create progress bar
         pbar = tqdm(data_loader, desc='Validation', leave=False, ncols=100)
@@ -327,48 +361,72 @@ class TrainBlock(PipelineBlock):
                 X_batch = X_batch.to(device)
                 y_batch = y_batch.to(device)
                 
-                # Forward pass to get logits
-                outputs = model(X_batch)  # V1/V2: tensor, V3: dict
+                outputs = model(X_batch)
                 
-                # Handle V3 (dict) vs V1/V2 (tensor) outputs
-                if isinstance(outputs, dict):
-                    logits = outputs['logits']  # V3: extract logits from dict
-                else:
-                    logits = outputs  # V1/V2: already logits
-                
-                # Handle both old (B, T, C) and new (B, C) output shapes
-                if len(logits.shape) == 3:
-                    # Old format: (B, T, C)
-                    B, T, C = logits.shape
-                    logits_flat = logits.view(B * T, C)
-                    y_flat = y_batch.view(B * T)
-                else:
-                    # New format: (B, vocab_size) for single-step prediction
-                    logits_flat = logits  # (B, vocab_size)
-                    # Handle both (B,) and (B, 1) target shapes
+                # Handle multi-horizon (V4) vs single horizon (V1/V2/V3)
+                if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
+                    # Multi-horizon V4
+                    loss = 0
+                    all_correct = 0
+                    all_samples = 0
+                    
+                    # y_batch shape: (B, 4) for 4 horizons
+                    for idx, horizon in enumerate(['horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h']):
+                        logits = outputs[horizon]['logits']
+                        y_horizon = y_batch[:, idx]
+                        
+                        horizon_loss = criterion(logits, y_horizon)
+                        loss += horizon_loss
+                        
+                        predictions = torch.argmax(logits, dim=-1)
+                        all_correct += (predictions == y_horizon).sum().item()
+                        all_samples += y_horizon.numel()
+                    
+                    loss = loss / 4.0
+                    batch_acc = all_correct / all_samples
+                    total_correct += all_correct
+                    total_samples += all_samples
+                    
+                elif isinstance(outputs, dict):
+                    # Single horizon V3
+                    logits = outputs['logits']
+                    logits_flat = logits
                     if len(y_batch.shape) > 1:
-                        y_flat = y_batch.squeeze(-1)  # (B,)
+                        y_flat = y_batch.squeeze(-1)
                     else:
-                        y_flat = y_batch  # Already (B,)
-                
-                # Compute loss
-                loss = criterion(logits_flat, y_flat)
-                
-                # Metrics
-                predictions = torch.argmax(logits_flat, dim=-1)
-                batch_correct = (predictions == y_flat).sum().item()
-                batch_samples = y_flat.numel()
-                batch_acc = batch_correct / batch_samples
+                        y_flat = y_batch
+                    loss = criterion(logits_flat, y_flat)
+                    predictions = torch.argmax(logits_flat, dim=-1)
+                    batch_correct = (predictions == y_flat).sum().item()
+                    batch_samples = y_flat.numel()
+                    batch_acc = batch_correct / batch_samples
+                    total_correct += batch_correct
+                    total_samples += batch_samples
+                else:
+                    # V1/V2
+                    logits = outputs
+                    if len(logits.shape) == 3:
+                        B, T, C = logits.shape
+                        logits_flat = logits.view(B * T, C)
+                        y_flat = y_batch.view(B * T)
+                    else:
+                        logits_flat = logits
+                        y_flat = y_batch.squeeze(-1) if len(y_batch.shape) > 1 else y_batch
+                    loss = criterion(logits_flat, y_flat)
+                    predictions = torch.argmax(logits_flat, dim=-1)
+                    batch_correct = (predictions == y_flat).sum().item()
+                    batch_samples = y_flat.numel()
+                    batch_acc = batch_correct / batch_samples
+                    total_correct += batch_correct
+                    total_samples += batch_samples
                 
                 total_loss += loss.item() * X_batch.size(0)
-                total_correct += batch_correct
-                total_samples += batch_samples
                 
                 # Update progress bar
                 pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_acc:.4f}'})
-            
-            avg_loss = total_loss / len(data_loader.dataset)
-            avg_acc = total_correct / total_samples
-            
-            return avg_loss, avg_acc
+        
+        avg_loss = total_loss / len(data_loader.dataset)
+        avg_acc = total_correct / total_samples
+        
+        return avg_loss, avg_acc
 
