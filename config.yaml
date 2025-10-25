@@ -129,7 +129,7 @@ training:
   
   # NEW: Binary classification loss parameters
   binary_loss_type: bce_with_logits  # Use BCEWithLogitsLoss for binary classification
-  pos_weight: 5.7              # Upweight minority (BUY) class in binary classification
+  pos_weight: 2.0              # Moderate upweight of minority (BUY) class, reduced from 5.7
   
   # Alternative loss function parameters (used if loss_type is changed)
   ordinal_sigma: 5.0           # For smooth_ordinal: Gaussian smoothing sigma
@@ -155,7 +155,7 @@ inference:
   sampling: argmax             # Sampling strategy: 'argmax' or 'sample'
   
   # Single-horizon binary BUY decision
-  single_threshold: 0.70       # Probability threshold for BUY in single-horizon mode
+  single_threshold: 0.95       # Probability threshold for BUY in single-horizon mode (very selective)
   
   # (Kept for compatibility if multi-horizon is re-enabled)
   voting_strategy: weighted    # 'strict', 'majority', 'weighted', 'confidence_and'
