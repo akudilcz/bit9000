@@ -413,6 +413,7 @@ class TrainBlock(PipelineBlock):
         # Check if model is multi-horizon (V4) and binary classification
         is_multi_horizon = hasattr(model, 'horizon_heads')
         binary_classification = self.config['model'].get('binary_classification', False)
+        multi_horizon_enabled = self.config['model'].get('multi_horizon_enabled', True)
 
         # For binary classification, track BUY precision metrics
         if binary_classification:
