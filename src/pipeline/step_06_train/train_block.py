@@ -154,6 +154,8 @@ class TrainBlock(PipelineBlock):
             'val_loss': [],
             'val_acc': []
         }
+        if binary_classification:
+            history['buy_precision'] = []
         
         best_val_loss = float('inf')
         patience_counter = 0
@@ -166,9 +168,15 @@ class TrainBlock(PipelineBlock):
             )
             
             # Validate
-            val_loss, val_acc = self._validate_epoch(
+            val_result = self._validate_epoch(
                 model, val_loader, criterion, device
             )
+
+            if binary_classification:
+                val_loss, val_acc, buy_precision = val_result
+            else:
+                val_loss, val_acc = val_result
+                buy_precision = None
             
             # Update scheduler
             scheduler.step()
@@ -178,13 +186,18 @@ class TrainBlock(PipelineBlock):
             history['train_acc'].append(train_acc)
             history['val_loss'].append(val_loss)
             history['val_acc'].append(val_acc)
-            
+            if binary_classification:
+                history['buy_precision'].append(buy_precision)
+
             # Log progress
-            logger.info(
+            log_msg = (
                 f"  Epoch {epoch+1:3d}/{epochs}: "
                 f"train_loss={train_loss:.4f}, train_acc={train_acc:.4f}, "
                 f"val_loss={val_loss:.4f}, val_acc={val_acc:.4f}"
             )
+            if binary_classification:
+                log_msg += f", buy_precision={buy_precision:.3f}"
+            logger.info(log_msg)
             
             # Early stopping
             if val_loss < best_val_loss:
@@ -383,11 +396,16 @@ class TrainBlock(PipelineBlock):
         total_loss = 0
         total_correct = 0
         total_samples = 0
-        
+
         # Check if model is multi-horizon (V4) and binary classification
         is_multi_horizon = hasattr(model, 'horizon_heads')
         binary_classification = self.config['model'].get('binary_classification', False)
-        
+
+        # For binary classification, track BUY precision metrics
+        if binary_classification:
+            buy_predictions = []  # List of all BUY predictions (0 or 1)
+            buy_targets = []      # Corresponding ground truth labels
+
         # Create progress bar
         pbar = tqdm(data_loader, desc='Validation', leave=False, ncols=100)
         
@@ -405,12 +423,12 @@ class TrainBlock(PipelineBlock):
                     loss = 0
                     all_correct = 0
                     all_samples = 0
-                    
+
                     # y_batch shape: (B, 4) for 4 horizons
                     for idx, horizon in enumerate(['horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h']):
                         logits = outputs[horizon]['logits']
                         y_horizon = y_batch[:, idx]
-                        
+
                         if binary_classification:
                             # Binary classification with 2 classes
                             horizon_loss = criterion(logits, y_horizon.long()) * horizon_weights[idx]
@@ -418,15 +436,28 @@ class TrainBlock(PipelineBlock):
                         else:
                             horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
                             predictions = torch.argmax(logits, dim=-1)
-                        
+
                         loss += horizon_loss
                         all_correct += (predictions == y_horizon).sum().item()
                         all_samples += y_horizon.numel()
-                    
+
                     loss = loss / sum(horizon_weights)
                     batch_acc = all_correct / all_samples
                     total_correct += all_correct
                     total_samples += all_samples
+
+                    # For binary classification, also compute BUY precision using voting
+                    if binary_classification:
+                        voting_strategy = self.config['inference'].get('voting_strategy', 'weighted')
+                        threshold = self.config['inference'].get('voting_threshold', 0.70)
+                        min_agree = self.config['inference'].get('min_horizons_agree', 3)
+
+                        # Get final BUY signals using multi-horizon voting
+                        buy_signals = self.inference_vote(outputs, voting_strategy, threshold, min_agree)
+
+                        # Collect for precision calculation (use first horizon's targets as representative)
+                        buy_predictions.extend(buy_signals.cpu().numpy())
+                        buy_targets.extend(y_batch[:, 0].cpu().numpy())  # Use 1h horizon as representative
                     
                 elif isinstance(outputs, dict):
                     # Single horizon V3
@@ -462,13 +493,32 @@ class TrainBlock(PipelineBlock):
                     total_samples += batch_samples
                 
                 total_loss += loss.item() * X_batch.size(0)
-                
+
                 # Update progress bar
                 pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_acc:.4f}'})
-        
+
         avg_loss = total_loss / len(data_loader.dataset)
         avg_acc = total_correct / total_samples
-        
+
+        # Calculate BUY precision for binary classification
+        if binary_classification:
+            import numpy as np
+            buy_predictions = np.array(buy_predictions)
+            buy_targets = np.array(buy_targets)
+
+            # BUY precision: TP / (TP + FP) = correct BUY predictions / total BUY predictions
+            buy_pred_mask = buy_predictions == 1
+            if buy_pred_mask.sum() > 0:  # Avoid division by zero
+                buy_precision = (buy_targets[buy_pred_mask] == 1).mean()
+            else:
+                buy_precision = 0.0
+
+            buy_signal_rate = buy_pred_mask.mean()
+
+            logger.info(f"  BUY Precision: {buy_precision:.3f} ({buy_pred_mask.sum()}/{len(buy_predictions)} signals = {buy_signal_rate:.3f} rate)")
+
+            return avg_loss, avg_acc, buy_precision
+
         return avg_loss, avg_acc
     
     def inference_vote(self, outputs: Dict, voting_strategy: str = 'weighted', 
