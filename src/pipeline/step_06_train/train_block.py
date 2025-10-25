@@ -492,8 +492,10 @@ class TrainBlock(PipelineBlock):
         probs = {}
         preds = {}
         for horizon in ['horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h']:
-            logits = outputs[horizon]['logits']  # (B, 2)
-            probs[horizon] = torch.sigmoid(logits[:, 1] if logits.shape[-1] == 2 else logits)
+            logits = outputs[horizon]['logits']  # (B, 2) for binary classification
+            # Use softmax for multi-class (even if 2 classes)
+            prob_dist = torch.softmax(logits, dim=-1)
+            probs[horizon] = prob_dist[:, 1]  # Probability of class 1 (BUY)
             preds[horizon] = (probs[horizon] > 0.5).float()
         
         if voting_strategy == 'strict':
