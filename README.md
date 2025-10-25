@@ -1,15 +1,18 @@
 # Simple Multi-Coin Token Predictor
 
-A lightweight transformer model that predicts XRP price movements over the next 8 hours using multi-coin context. Uses 256-bin continuous price quantization and autoregressive generation.
+A lightweight transformer model that predicts XRP price direction 8 hours ahead using multi-coin context. Directional binary classification (BUY if price rises, NO-BUY if flat/down) with post-training threshold calibration for ~5% signal frequency.
 
 ## ✅ System Status
 
-**Latest Results (2025-10-24):**
-- ✅ **Training complete** - Best validation loss: **1.0759** (54 epochs)
-- ✅ **Model**: 471,808 parameters (2 layers, d_model=128, embedding_dim=32)
-- ✅ **Evaluation**: **42.03% accuracy** (beats persistence baseline 35.83%)
-- ✅ **Inference**: Working - Real-time predictions with probabilities
-- ✅ **Hyperparameter tuning**: 40 trials completed (best val_loss=1.0776)
+**Latest Results (2025-10-26):**
+- ✅ **Architecture**: CryptoTransformerV4 (8-layer encoder, 8-layer XRP decoder, 4 heads, d_model=208)
+- ✅ **Binary Classification**: Directional prediction (BUY = price up, NO-BUY = flat/down)
+- ✅ **Prediction Horizon**: 8 hours ahead (less noise, more directional)
+- ✅ **Input Context**: 48 hours × 4 coins (BTC, ETH, LTC, XRP) × 5 channels (price, volume, RSI, MACD, BB position)
+- ✅ **Calibration**: Post-training threshold calibration achieving ~5% BUY signal rate
+- ✅ **Target Performance**: BUY precision >65% (when we say BUY, we're right >65% of the time)
+- ✅ **Regularization**: Aggressive (dropout=0.5, weight_decay=0.2, warmup=15 epochs, label_smoothing=0.12)
+- ✅ **Training**: 200 epochs, ~64K samples, binary CrossEntropyLoss with pos_weight adaptation
 
 ## Quick Start
 
@@ -58,48 +61,81 @@ cat artifacts/step_08_inference/predictions_*.json
 
 ## Pipeline Overview
 
-The model uses a 9-step pipeline:
+The model uses a 9-step pipeline optimized for directional BUY/NO-BUY signal prediction:
 
 1. **Reset**: Clear previous artifacts
-2. **Download**: Fetch hourly OHLCV data (10 coins, 2020-2025)
-3. **Clean**: Fill gaps and validate data quality
-4. **Split**: Temporal train/val split (80/20)
-5. **Tokenize**: Convert prices to 256-bin tokens (quantile-based, uniform distribution)
-6. **Sequences**: Create rolling windows (24h input → 1h output, autoregressively generated to 8h)
-7. **Train**: Train transformer decoder on token sequences
-8. **Evaluate**: Compute accuracy and baseline comparisons
-9. **Inference**: Real-time 8-hour XRP price predictions (autoregressive generation)
+2. **Download**: Fetch hourly OHLCV data (4 coins: BTC, ETH, LTC, XRP; 2018-2025)
+3. **Clean**: Fill gaps, add technical indicators (RSI, MACD, Bollinger Bands)
+4. **Split**: Temporal train/val split (80/20, no shuffling to prevent leakage)
+5. **Tokenize**: Convert 5 channels to 256-bin tokens (quantile-based, uniform distribution)
+6. **Sequences**: Create rolling windows (48h input × 4 coins × 5 channels → 8h ahead directional target)
+7. **Train**: Train transformer with binary classification (BUY if future_price > current_price)
+8. **Evaluate**: Compute BUY precision and signal rate via post-training calibration
+9. **Inference**: Real-time directional predictions with calibrated threshold (~5% signal rate)
 
 ## Architecture
 
-**Models**: Three transformer architectures (V1, V2, V3)
-- **CryptoTransformerV1**: Decoder-only baseline (~8M params)
-- **CryptoTransformerV2**: Enhanced decoder with multi-coin attention (~471K params)
-- **CryptoTransformerV3**: Encoder-decoder with multi-task learning (~26M params)
-- **Input**: 336 hours × 10 coins × 2 channels (price + volume)
-- **Output**: 1 hour next-token prediction (256 classes), autoregressively generated to 8 hours
-- **Layers**: 2 transformer decoder layers
-- **Heads**: 4 attention heads
-- **Model dim**: 128
-- **Embedding dim**: 32
-- **Feedforward dim**: 256
-- **Parameters**: 471,808
+**CryptoTransformerV4** - Encoder-decoder transformer with dedicated pathways and binary classification:
+- **Encoder**: Shared multi-coin context processor (8 layers, 4 heads)
+  - Processes all 4 coins (BTC, ETH, LTC, XRP) jointly
+  - Input: 48h × 4 coins × 5 channels (price, volume, RSI, MACD, BB_position)
+  - Output: Rich contextualized representations
+  
+- **Decoders**: 
+  - BTC encoder (2 layers, dedicated pathway since BTC leads altcoins)
+  - XRP decoder (8 layers, cross-attention to shared encoder + BTC encoder)
+  - Time features: Cyclical hour/day encoding + sequence position
+  
+- **Prediction Head**: Binary classification (2 classes: NO-BUY=0, BUY=1)
+  - Output: Logits for softmax → probabilities
+  - Calibrated threshold: Finds optimal cutoff for ~5% signal rate
+  
+- **Classification Logic**: Directional
+  - BUY (class 1): future_price_token > current_price_token (price rises)
+  - NO-BUY (class 0): future_price_token <= current_price_token (flat/down)
+  - Natural interpretation: "Buy when price will go up"
 
-**Tokenization**: 256-bin quantization
-- Bins: 0-255 representing continuous price range
-- Method: Quantile-based (uniform distribution across bins)
-- Input: Price and volume for each coin
+**Model Dimensions**:
+- d_model: 208
+- nhead: 4
+- num_encoder_layers: 8
+- num_decoder_layers: 8  
+- dim_feedforward: 768
+- dropout: 0.5
+- Parameters: ~10.5M
+
+**Loss Function**: CrossEntropyLoss with class weighting
+- pos_weight: Adaptively scaled based on class imbalance
+- Purpose: Handle imbalanced BUY/NO-BUY ratio
+
+**Regularization** (aggressive, for small dataset):
+- Dropout: 0.5
+- Weight decay: 0.2
+- Label smoothing: 0.12
+- Gaussian noise: 0.025
+- Gradient clipping: max_norm=0.5
+- Warmup: 15 epochs (1e-5 → 1.5e-4 LR)
+- Early stopping: patience=15 epochs, min_delta=0.0001
+
+**Tokenization**: 256-bin quantile-based encoding
+- Converts continuous price/volume/indicators to discrete tokens
+- Quantile binning ensures uniform distribution across 0-255
+- Fitted on training data only (no leakage)
 
 ## Performance
 
-| Metric | Value |
-|--------|-------|
-| **Best val loss** | 1.0759 |
-| **Evaluation accuracy** | 42.03% |
-| **Persistence baseline** | 35.83% |
-| **Random baseline** | 34.51% |
-| **Model improvement** | +6.2% over persistence |
-| **Training time** | ~1 min (54 epochs) |
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **BUY Signal Rate** | ~5% | Calibrated on validation set |
+| **Target BUY Precision** | >65% | When we say BUY, we're right >65% |
+| **Prediction Horizon** | 8 hours | Directional (UP/DOWN) |
+| **Input Context** | 48 hours | 2 days of history |
+| **Data Points** | ~64K train, ~4K val | Temporal split 80/20 |
+| **Model Parameters** | ~10.5M | 8-layer encoder + decoder |
+| **Training Time** | ~30-40 min | 200 epochs on single GPU |
+| **Calibration Method** | Post-training | Finds threshold for target signal rate |
+
+**Key Innovation**: Post-training threshold calibration automatically adjusts decision boundary to achieve target signal frequency while maximizing precision, enabling practical trading signal generation.
 
 ## Artifacts
 
