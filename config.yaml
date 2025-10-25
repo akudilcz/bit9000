@@ -52,9 +52,9 @@ tokenization:
 # SEQUENCE CONFIGURATION
 # =============================================================================
 sequences:
-  input_length: 24   # 24 hours (1 day) of historical context
+  input_length: 48   # 48 hours (2 days) of historical context - increased for better trend detection
   output_length: 8   # Predict 8 hours ahead
-  num_channels: 2    # 0=price, 1=volume
+  num_channels: 5    # 0=price, 1=volume, 2=rsi, 3=macd, 4=bb_position
 
 # =============================================================================
 # MODEL ARCHITECTURE - CryptoTransformerV3
@@ -79,7 +79,7 @@ model:
   # Embeddings and positional encoding
   coin_embedding_dim: 32     # Coin-specific embedding dimension
   positional_encoding: sinusoidal  # 'learned' or 'sinusoidal'
-  max_seq_len: 512           # Max sequence length (24h × 4 coins × 2 channels = 192)
+  max_seq_len: 1024          # Max sequence length (48h × 4 coins × 5 channels = 960)
   
   # Multi-task learning heads
   multitask_enabled: true    # Enable multi-task learning

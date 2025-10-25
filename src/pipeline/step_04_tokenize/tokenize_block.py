@@ -1,9 +1,9 @@
-"""Step 4: Tokenize - Convert prices and volume to discrete token sequences
+"""Step 4: Tokenize - Convert prices, volume, and indicators to discrete token sequences
 
-Philosophy: Simple price and volume movements → discrete tokens (256-bin quantization)
-- 2 channels: price (log returns) and volume (log changes)
+Philosophy: Price movements + volume + technical indicators → discrete tokens (256-bin quantization)
+- 5 channels: price (log returns), volume (log changes), RSI, MACD, Bollinger Band position
 - Quantile-based binning ensures uniform distribution across 256 bins
-- No engineered features, just raw movements
+- Technical indicators provide momentum and trend context
 - Fit bin edges on train data only (no leakage)
 """
 
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 class TokenizeArtifact:
-    """Artifact for tokenized data with 2 channels"""
+    """Artifact for tokenized data with 5 channels (price, volume, rsi, macd, bb_position)"""
     def __init__(self, train_path: Path, val_path: Path, 
                  train_shape: Tuple[int, int], val_shape: Tuple[int, int],
                  thresholds_path: Path, token_distribution: Dict[int, Dict[str, float]],
@@ -48,21 +48,24 @@ class TokenizeArtifact:
 
 
 class TokenizeBlock(PipelineBlock):
-    """Convert prices and volume to 256-bin token sequences using quantile-based binning"""
+    """Convert prices, volume, and indicators to 256-bin token sequences using quantile-based binning"""
     
     def run(self, split_artifact: SplitDataArtifact):
         """
-        Tokenize prices and volume using quantile-based thresholds
+        Tokenize prices, volume, and indicators using quantile-based thresholds
         
         Process:
         1. FIT: Calculate quantile thresholds on TRAINING data only (per coin, per channel)
         2. TRANSFORM: Apply thresholds to both train and val data
         3. Each coin × channel gets independent thresholds (adaptive to volatility)
-        4. Output: 0=down, 1=steady, 2=up (balanced ~33/33/33 distribution)
+        4. Output: tokens 0-255 (balanced distribution via quantile-based binning)
         
         Channels:
         - Price channel: log returns of close prices
         - Volume channel: log changes in volume
+        - RSI channel: Relative Strength Index (0-100 normalized to 0-1)
+        - MACD channel: MACD histogram (normalized)
+        - BB Position channel: Position within Bollinger Bands (0-1)
         
         Args:
             split_artifact: SplitDataArtifact from step_03_split
@@ -85,7 +88,7 @@ class TokenizeBlock(PipelineBlock):
         # Get coin list from config
         coins = self.config['data']['coins']
         logger.info(f"  Coins: {coins}")
-        logger.info(f"  Channels: price + volume")
+        logger.info(f"  Channels: price + volume + rsi + macd + bb_position (5 channels)")
         
         # FIT: Calculate quantile-based bin edges on training data
         logger.info("\n[2/4] FIT: Calculating quantile-based bin edges on TRAINING data...")
@@ -98,9 +101,15 @@ class TokenizeBlock(PipelineBlock):
             if coin in bin_edges:
                 price_edges = bin_edges[coin]['price']
                 volume_edges = bin_edges[coin]['volume']
+                rsi_edges = bin_edges[coin]['rsi']
+                macd_edges = bin_edges[coin]['macd']
+                bb_edges = bin_edges[coin]['bb_position']
                 logger.info(f"  {coin}:")
                 logger.info(f"    Price:  {len(price_edges)} bin edges (min={price_edges.min():.6f}, max={price_edges.max():.6f})")
                 logger.info(f"    Volume: {len(volume_edges)} bin edges (min={volume_edges.min():.6f}, max={volume_edges.max():.6f})")
+                logger.info(f"    RSI: {len(rsi_edges)} bin edges (min={rsi_edges.min():.6f}, max={rsi_edges.max():.6f})")
+                logger.info(f"    MACD: {len(macd_edges)} bin edges (min={macd_edges.min():.6f}, max={macd_edges.max():.6f})")
+                logger.info(f"    BB_Pos: {len(bb_edges)} bin edges (min={bb_edges.min():.6f}, max={bb_edges.max():.6f})")
         
         # TRANSFORM: Apply bin edges to train and val
         logger.info("\n[3/4] TRANSFORM: Tokenizing train and val data...")
@@ -149,7 +158,10 @@ class TokenizeBlock(PipelineBlock):
         for coin, channels in bin_edges.items():
             bin_edges_serializable[coin] = {
                 'price': channels['price'].tolist(),
-                'volume': channels['volume'].tolist()
+                'volume': channels['volume'].tolist(),
+                'rsi': channels['rsi'].tolist(),
+                'macd': channels['macd'].tolist(),
+                'bb_position': channels['bb_position'].tolist()
             }
         with open(bin_edges_path, 'w') as f:
             json.dump(bin_edges_serializable, f, indent=2)
@@ -159,7 +171,7 @@ class TokenizeBlock(PipelineBlock):
         self._plot_token_distribution(token_distribution, vocab_size, block_dir)
         
         # Create artifact
-        num_channels = 2  # price + volume
+        num_channels = 5  # price + volume + rsi + macd + bb_position
         artifact = TokenizeArtifact(
             train_path=train_path,
             val_path=val_path,
@@ -184,27 +196,30 @@ class TokenizeBlock(PipelineBlock):
         
         logger.info("\n" + "="*70)
         logger.info("TOKENIZATION COMPLETE")
-        logger.info(f"  Train: {train_tokens.shape[0]:,} timesteps × {len(coins)} coins × 2 channels")
-        logger.info(f"  Val: {val_tokens.shape[0]:,} timesteps × {len(coins)} coins × 2 channels")
+        logger.info(f"  Train: {train_tokens.shape[0]:,} timesteps × {len(coins)} coins × 5 channels")
+        logger.info(f"  Val: {val_tokens.shape[0]:,} timesteps × {len(coins)} coins × 5 channels")
         logger.info("="*70 + "\n")
         
         return artifact
     
     def _fit_bin_edges(self, train_df: pd.DataFrame, coins: list) -> Dict[str, Dict[str, np.ndarray]]:
         """
-        FIT: Calculate quantile-based bin edges on training data for price and volume
+        FIT: Calculate quantile-based bin edges on training data for all 5 channels
         
         For each coin:
         - Price channel: Compute hourly log returns: r = log(close[t] / close[t-1])
         - Volume channel: Compute hourly log changes: v = log(volume[t] / volume[t-1])
+        - RSI channel: Direct values (already 0-1)
+        - MACD channel: Direct histogram values (already normalized)
+        - BB Position channel: Direct values (already 0-1)
         - For each channel, find 255 quantile thresholds to create 256 bins
         
         Args:
-            train_df: Training data with COIN_close and COIN_volume columns
+            train_df: Training data with COIN_close, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position
             coins: List of coin symbols
             
         Returns:
-            Dictionary {coin: {price: bin_edges, volume: bin_edges}}
+            Dictionary {coin: {price: bin_edges, volume: bin_edges, rsi: bin_edges, macd: bin_edges, bb_position: bin_edges}}
         """
         vocab_size = self.config['tokenization']['vocab_size']  # 256
         percentiles = self.config['tokenization']['percentiles']  # [1, 2, ..., 99]
@@ -214,9 +229,16 @@ class TokenizeBlock(PipelineBlock):
         for coin in coins:
             close_col = f"{coin}_close"
             volume_col = f"{coin}_volume"
+            rsi_col = f"{coin}_rsi"
+            macd_col = f"{coin}_macd"
+            bb_col = f"{coin}_bb_position"
             
             if close_col not in train_df.columns or volume_col not in train_df.columns:
-                logger.warning(f"  Missing columns for {coin}, skipping")
+                logger.warning(f"  Missing price/volume columns for {coin}, skipping")
+                continue
+            
+            if rsi_col not in train_df.columns or macd_col not in train_df.columns or bb_col not in train_df.columns:
+                logger.warning(f"  Missing indicator columns for {coin}, skipping")
                 continue
             
             # Compute log returns for price
@@ -229,17 +251,32 @@ class TokenizeBlock(PipelineBlock):
             volume_changes = np.log(volumes / volumes.shift(1))
             volume_changes = volume_changes.replace([np.inf, -np.inf], np.nan).dropna()
             
+            # Get indicator values (already processed)
+            rsi_values = train_df[rsi_col].dropna()
+            macd_values = train_df[macd_col].dropna()
+            bb_values = train_df[bb_col].dropna()
+            
             if len(price_returns) == 0 or len(volume_changes) == 0:
-                logger.warning(f"  No valid data for {coin}, skipping")
+                logger.warning(f"  No valid price/volume data for {coin}, skipping")
                 continue
             
-            # Calculate quantile-based bin edges
+            if len(rsi_values) == 0 or len(macd_values) == 0 or len(bb_values) == 0:
+                logger.warning(f"  No valid indicator data for {coin}, skipping")
+                continue
+            
+            # Calculate quantile-based bin edges for all 5 channels
             price_bin_edges = np.percentile(price_returns, percentiles)
             volume_bin_edges = np.percentile(volume_changes, percentiles)
+            rsi_bin_edges = np.percentile(rsi_values, percentiles)
+            macd_bin_edges = np.percentile(macd_values, percentiles)
+            bb_bin_edges = np.percentile(bb_values, percentiles)
             
             bin_edges[coin] = {
                 'price': price_bin_edges,
-                'volume': volume_bin_edges
+                'volume': volume_bin_edges,
+                'rsi': rsi_bin_edges,
+                'macd': macd_bin_edges,
+                'bb_position': bb_bin_edges
             }
         
         return bin_edges
@@ -247,7 +284,7 @@ class TokenizeBlock(PipelineBlock):
     def _transform_to_tokens(self, df: pd.DataFrame, coins: list, 
                             bin_edges: Dict[str, Dict[str, np.ndarray]]) -> pd.DataFrame:
         """
-        TRANSFORM: Convert prices and volume to tokens using fitted bin edges
+        TRANSFORM: Convert prices, volume, and indicators to tokens using fitted bin edges
         
         Token mapping (applied independently to each channel):
         - Use np.digitize to assign values to bins (0-255)
@@ -255,21 +292,28 @@ class TokenizeBlock(PipelineBlock):
         - Values above max bin edge → bin 255
         
         Args:
-            df: DataFrame with COIN_close and COIN_volume columns
+            df: DataFrame with COIN_close, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position
             coins: List of coin symbols
-            bin_edges: Fitted bin edges {coin: {price: bin_edges, volume: bin_edges}}
+            bin_edges: Fitted bin edges {coin: {price: edges, volume: edges, rsi: edges, macd: edges, bb_position: edges}}
             
         Returns:
-            DataFrame with columns: COIN_price, COIN_volume (token values 0-255)
+            DataFrame with columns: COIN_price, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position (token values 0-255)
         """
         tokens_dict = {}
         
         for coin in coins:
             close_col = f"{coin}_close"
             volume_col = f"{coin}_volume"
+            rsi_col = f"{coin}_rsi"
+            macd_col = f"{coin}_macd"
+            bb_col = f"{coin}_bb_position"
             
             if close_col not in df.columns or volume_col not in df.columns:
-                logger.warning(f"  Missing columns for {coin}, skipping")
+                logger.warning(f"  Missing price/volume columns for {coin}, skipping")
+                continue
+            
+            if rsi_col not in df.columns or macd_col not in df.columns or bb_col not in df.columns:
+                logger.warning(f"  Missing indicator columns for {coin}, skipping")
                 continue
             
             if coin not in bin_edges:
@@ -279,30 +323,40 @@ class TokenizeBlock(PipelineBlock):
             # PRICE CHANNEL
             prices = df[close_col]
             price_returns = np.log(prices / prices.shift(1))
-            
-            # Use np.digitize to assign to bins (0-255)
-            price_bin_edges = bin_edges[coin]['price']
-            price_tokens = np.digitize(price_returns, price_bin_edges)
-            
+            price_tokens = np.digitize(price_returns, bin_edges[coin]['price'])
             tokens_dict[f"{coin}_price"] = price_tokens
             
             # VOLUME CHANNEL
             volumes = df[volume_col]
             volume_changes = np.log(volumes / volumes.shift(1))
             volume_changes = volume_changes.replace([np.inf, -np.inf], np.nan)
-            
-            # Use np.digitize to assign to bins (0-255)
-            volume_bin_edges = bin_edges[coin]['volume']
-            volume_tokens = np.digitize(volume_changes, volume_bin_edges)
-            
+            volume_tokens = np.digitize(volume_changes, bin_edges[coin]['volume'])
             tokens_dict[f"{coin}_volume"] = volume_tokens
+            
+            # RSI CHANNEL
+            rsi_values = df[rsi_col]
+            rsi_tokens = np.digitize(rsi_values, bin_edges[coin]['rsi'])
+            tokens_dict[f"{coin}_rsi"] = rsi_tokens
+            
+            # MACD CHANNEL
+            macd_values = df[macd_col]
+            macd_tokens = np.digitize(macd_values, bin_edges[coin]['macd'])
+            tokens_dict[f"{coin}_macd"] = macd_tokens
+            
+            # BOLLINGER BAND POSITION CHANNEL
+            bb_values = df[bb_col]
+            bb_tokens = np.digitize(bb_values, bin_edges[coin]['bb_position'])
+            tokens_dict[f"{coin}_bb_position"] = bb_tokens
         
-        # Create DataFrame with column order: COIN1_price, COIN1_volume, COIN2_price, COIN2_volume, ...
+        # Create DataFrame with column order: COIN1_price, COIN1_volume, COIN1_rsi, COIN1_macd, COIN1_bb_position, ...
         ordered_cols = []
         for coin in coins:
             if f"{coin}_price" in tokens_dict:
                 ordered_cols.append(f"{coin}_price")
                 ordered_cols.append(f"{coin}_volume")
+                ordered_cols.append(f"{coin}_rsi")
+                ordered_cols.append(f"{coin}_macd")
+                ordered_cols.append(f"{coin}_bb_position")
         
         tokens_df = pd.DataFrame({col: tokens_dict[col] for col in ordered_cols}, index=df.index)
         

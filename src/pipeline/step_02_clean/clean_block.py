@@ -7,6 +7,7 @@ from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import CleanDataArtifact, RawDataArtifact
 from src.utils.logger import get_logger
 from src.utils.plot_utils import plot_data_quality, plot_timeseries
+from src.utils.technical_indicators import add_technical_indicators
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,10 @@ class CleanBlock(PipelineBlock):
         # 5. Verify index is monotonic
         if not df.index.is_monotonic_increasing:
             raise ValueError("Index is not monotonic after cleaning")
+        
+        # 6. Add technical indicators (RSI, MACD, Bollinger Bands)
+        logger.info("Adding technical indicators...")
+        df = add_technical_indicators(df)
         
         # Quality metrics
         quality_metrics = {
