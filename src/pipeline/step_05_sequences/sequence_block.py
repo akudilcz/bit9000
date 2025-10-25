@@ -237,8 +237,9 @@ class SequenceBlock(PipelineBlock):
         target_coin_idx = coin_names.index(target_coin)
         
         # Calculate number of valid windows
-        window_total = input_length + output_length
-        num_samples = T - window_total + 1
+        # Need: input_length + (prediction_horizon - 1) steps to look prediction_horizon ahead
+        window_total = input_length + prediction_horizon - 1
+        num_samples = T - window_total
         
         if num_samples <= 0:
             raise ValueError(
