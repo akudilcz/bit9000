@@ -227,9 +227,16 @@ class HyperparameterTuner:
 
                     optimizer.zero_grad()
                     
-                    # Forward pass: model outputs dict with logits for 3-class prediction
-                    outputs = model(X_batch)  # Returns dict with 'logits' key
-                    logits = outputs['logits']  # (batch, 3)
+                    # Forward pass: model outputs dict with logits
+                    outputs = model(X_batch)
+                    
+                    # Handle different model architectures
+                    if isinstance(outputs, dict) and 'horizon_1h' in outputs:
+                        # V4 format: single-horizon binary classification
+                        logits = outputs['horizon_1h']['logits']  # (batch, 2)
+                    else:
+                        # V1/V2/V3 format
+                        logits = outputs if not isinstance(outputs, dict) else outputs['logits']
 
                     # Compute loss
                     loss = criterion(logits, y_batch)
@@ -259,8 +266,15 @@ class HyperparameterTuner:
                         if len(y_batch.shape) > 1:
                             y_batch = y_batch.squeeze(-1)
 
-                        outputs = model(X_batch)  # Returns dict with 'logits' key
-                        logits = outputs['logits']  # (batch, 3)
+                        outputs = model(X_batch)
+                        
+                        # Handle different model architectures
+                        if isinstance(outputs, dict) and 'horizon_1h' in outputs:
+                            # V4 format: single-horizon binary classification
+                            logits = outputs['horizon_1h']['logits']  # (batch, 2)
+                        else:
+                            # V1/V2/V3 format
+                            logits = outputs if not isinstance(outputs, dict) else outputs['logits']
                         
                         # Compute accuracy (label smoothing doesn't affect this)
                         preds = torch.argmax(logits, dim=1)
