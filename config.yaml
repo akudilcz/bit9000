@@ -72,8 +72,8 @@ model:
   # Transformer architecture (increased for better multi-horizon learning)
   d_model: 208                # Reduced from 256 for better regularization on 4-coin dataset
   nhead: 4                    # Reduced from 8 to 4 heads (fewer parameters, less overfitting)
-  num_encoder_layers: 3       # Shared encoder depth
-  num_decoder_layers: 3       # XRP decoder depth
+  num_encoder_layers: 8       # Increased from 3 to 8 - shared encoder depth
+  num_decoder_layers: 8       # Increased from 3 to 8 - XRP decoder depth
   dim_feedforward: 768        # Reduced from 1024
   dropout: 0.5                # Increased from 0.4 to match training config
   
