@@ -12,9 +12,10 @@ import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from pathlib import Path
 import json
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from tqdm import tqdm
 import math
+import numpy as np
 
 from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import ArtifactMetadata
@@ -384,11 +385,6 @@ class TrainBlock(PipelineBlock):
                 total_correct += batch_correct
                 total_samples += batch_samples
 
-            # Add threshold regularization for binary classification (keep it bounded)
-            if binary_classification and hasattr(model, 'decision_threshold'):
-                threshold_reg = 0.01 * torch.abs(model.decision_threshold)  # L1 penalty to keep threshold near 0
-                loss = loss + threshold_reg
-
             # Backward pass
             loss.backward()
             optimizer.step()
@@ -422,8 +418,8 @@ class TrainBlock(PipelineBlock):
 
         # For binary classification, track BUY precision metrics
         if binary_classification:
-            buy_predictions = []  # List of all BUY predictions (0 or 1)
-            buy_targets = []      # Corresponding ground truth labels
+            buy_probs = []         # Raw probabilities for BUY class
+            buy_targets = []       # Corresponding ground truth labels
 
         # Create progress bar
         pbar = tqdm(data_loader, desc='Validation', leave=False, ncols=100)
@@ -481,21 +477,7 @@ class TrainBlock(PipelineBlock):
                     if binary_classification:
                         # Convert logits to probabilities for class 1 (BUY)
                         prob_dist = torch.softmax(logits, dim=-1)
-                        buy_probs = prob_dist[:, 1]
-                        
-                        # Use learned threshold if available, otherwise use config threshold
-                        if hasattr(model, 'decision_threshold'):
-                            # decision_threshold starts at 0, so we apply sigmoid to constrain it
-                            learned_threshold = torch.sigmoid(model.decision_threshold).item()
-                            threshold = learned_threshold
-                            logger.debug(f"Using learned threshold: {threshold:.4f}")
-                        else:
-                            threshold = self.config['inference'].get('single_threshold', 0.70)
-                        
-                        buy_signals = (buy_probs > threshold).long()
-
-                        # Collect for precision calculation
-                        buy_predictions.extend(buy_signals.detach().cpu().numpy())
+                        buy_probs.extend(prob_dist[:, 1].detach().cpu().numpy())
                         buy_targets.extend(y_target.detach().cpu().numpy())
                     
                 elif isinstance(outputs, dict):
@@ -541,35 +523,24 @@ class TrainBlock(PipelineBlock):
 
         # Calculate BUY precision for binary classification
         if binary_classification:
-            import numpy as np
-            buy_predictions = np.array(buy_predictions)
+            buy_probs = np.array(buy_probs)
             buy_targets = np.array(buy_targets)
 
-            # BUY precision: TP / (TP + FP) = correct BUY predictions / total BUY predictions
-            buy_pred_mask = buy_predictions == 1
-            total_buy_signals = buy_pred_mask.sum()
-            
-            if total_buy_signals > 0:  # Avoid division by zero
-                correct_buy = (buy_targets[buy_pred_mask] == 1).sum()
-                buy_precision = correct_buy / total_buy_signals
-            else:
-                correct_buy = 0
-                buy_precision = 0.0
-
-            buy_signal_rate = total_buy_signals / len(buy_predictions) * 100
+            # Call calibration to find optimal threshold
+            optimal_threshold, precision, num_buy_signals, num_correct = self.calibrate_threshold(buy_probs, buy_targets)
 
             # Clear logging
             logger.info(f"  ========== BUY SIGNAL ANALYSIS ==========")
-            logger.info(f"  Total val samples: {len(buy_predictions)}")
-            logger.info(f"  BUY signals issued: {total_buy_signals} ({buy_signal_rate:.1f}%)")
-            if total_buy_signals > 0:
-                logger.info(f"  Correct BUY calls: {correct_buy}/{total_buy_signals}")
-                logger.info(f"  ✓ BUY PRECISION: {buy_precision:.1%} (when we say BUY, we're right {buy_precision:.1%} of the time)")
+            logger.info(f"  Total val samples: {len(buy_probs)}")
+            logger.info(f"  BUY signals issued: {num_buy_signals} ({num_buy_signals / len(buy_probs) * 100:.1f}%)")
+            if num_buy_signals > 0:
+                logger.info(f"  Correct BUY calls: {num_correct}/{num_buy_signals}")
+                logger.info(f"  ✓ BUY PRECISION: {precision:.1%} (when we say BUY, we're right {precision:.1%} of the time)")
             else:
                 logger.info(f"  ✓ BUY PRECISION: N/A (no BUY signals issued)")
             logger.info(f"  ==========================================")
 
-            return avg_loss, avg_acc, buy_precision
+            return avg_loss, avg_acc, precision
 
         return avg_loss, avg_acc
     
@@ -632,4 +603,50 @@ class TrainBlock(PipelineBlock):
             raise ValueError(f"Unknown voting strategy: {voting_strategy}")
         
         return result
+
+    def calibrate_threshold(self, buy_probs: np.ndarray, buy_targets: np.ndarray, 
+                           target_signal_rate: float = 0.05) -> Tuple[float, float, int, int]:
+        """
+        Find optimal threshold that achieves target signal rate while maximizing precision.
+        
+        This runs on validation data collected during an epoch to find the best threshold.
+        
+        Args:
+            buy_probs: (N,) array of predicted probabilities for BUY class
+            buy_targets: (N,) array of ground truth binary labels (0 or 1)
+            target_signal_rate: desired BUY signal rate (default 5%)
+            
+        Returns:
+            tuple: (optimal_threshold, precision, num_buy_signals, num_correct)
+        """
+        
+        # Sort probabilities and targets by confidence (descending)
+        sorted_indices = np.argsort(-buy_probs)
+        sorted_probs = buy_probs[sorted_indices]
+        sorted_targets = buy_targets[sorted_indices]
+        
+        # Calculate target number of BUY signals
+        target_num_signals = max(1, int(len(buy_probs) * target_signal_rate))
+        
+        # Get threshold that gives us approximately target_signal_rate
+        if target_num_signals < len(buy_probs):
+            threshold_idx = target_num_signals - 1
+            optimal_threshold = sorted_probs[threshold_idx]
+            # Add small epsilon to ensure we get exactly target signals
+            optimal_threshold = max(0.0, optimal_threshold - 1e-6)
+        else:
+            optimal_threshold = 0.0
+        
+        # Calculate precision with this threshold
+        buy_pred_mask = buy_probs > optimal_threshold
+        num_buy_signals = buy_pred_mask.sum()
+        
+        if num_buy_signals > 0:
+            num_correct = (buy_targets[buy_pred_mask] == 1).sum()
+            precision = num_correct / num_buy_signals
+        else:
+            num_correct = 0
+            precision = 0.0
+        
+        return optimal_threshold, precision, int(num_buy_signals), int(num_correct)
 
