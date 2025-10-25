@@ -55,6 +55,7 @@ sequences:
   input_length: 48   # 48 hours (2 days) of historical context - increased for better trend detection
   output_length: 1   # Predict 1 hour ahead (single-horizon BUY decision)
   num_channels: 5    # 0=price, 1=volume, 2=rsi, 3=macd, 4=bb_position
+  prediction_horizon: 8  # How many hours ahead to predict for BUY signal (8h = less noise, more directional)
 
 # =============================================================================
 # MODEL ARCHITECTURE - CryptoTransformerV4

@@ -85,9 +85,11 @@ class SequenceBlock(PipelineBlock):
         output_length = self.config['sequences']['output_length']  # 8 hours
         num_channels = self.config['sequences'].get('num_channels', 2)  # price + volume
         target_coin = self.config['data']['target_coin']  # XRP
+        prediction_horizon = self.config['sequences'].get('prediction_horizon', 1)  # hours ahead to predict
         
         logger.info(f"\n  Input length: {input_length} hours")
         logger.info(f"  Output length: {output_length} hours")
+        logger.info(f"  Prediction horizon: {prediction_horizon} hours ahead")
         logger.info(f"  Channels: {num_channels} (price + volume + rsi + macd + bb_position)")
         logger.info(f"  Target coin: {target_coin}")
         
@@ -108,10 +110,10 @@ class SequenceBlock(PipelineBlock):
         # Create sequences
         logger.info("\n[2/3] Creating sequences...")
         train_X, train_y = self._create_sequences(
-            train_tokens, input_length, output_length, target_coin, num_channels
+            train_tokens, input_length, output_length, target_coin, num_channels, prediction_horizon
         )
         val_X, val_y = self._create_sequences(
-            val_tokens, input_length, output_length, target_coin, num_channels
+            val_tokens, input_length, output_length, target_coin, num_channels, prediction_horizon
         )
         
         logger.info(f"  Train: X={train_X.shape}, y={train_y.shape}")
@@ -178,7 +180,8 @@ class SequenceBlock(PipelineBlock):
         return artifact
     
     def _create_sequences(self, tokens_df: pd.DataFrame, input_length: int,
-                         output_length: int, target_coin: str, num_channels: int) -> Tuple[np.ndarray, np.ndarray]:
+                         output_length: int, target_coin: str, num_channels: int,
+                         prediction_horizon: int = 1) -> Tuple[np.ndarray, np.ndarray]:
         """
         Create rolling window sequences with 5-channel support
         
@@ -245,7 +248,7 @@ class SequenceBlock(PipelineBlock):
         
         logger.info(f"    Creating {num_samples:,} windows from {T} timesteps...")
         logger.info(f"    Input: {input_length} steps × {num_coins} coins × {num_channels} channels")
-        logger.info(f"    Output: Multi-horizon predictions (1h, 2h, 4h, 8h) for {target_coin} price")
+        logger.info(f"    Output: Single-horizon prediction {prediction_horizon}h ahead for {target_coin} price")
         
         # Pre-allocate arrays
         X = np.zeros((num_samples, input_length, num_coins, num_channels), dtype=np.int64)
@@ -258,8 +261,8 @@ class SequenceBlock(PipelineBlock):
             # Input window: all coins, all channels (including target coin)
             X[i] = tokens_array[i:i+input_length, :, :]
             
-            # Single-horizon output: predict at 1h after input window
-            y_1h[i] = tokens_array[i+input_length, target_coin_idx, 0]  # 1 hour ahead
+            # Single-horizon output: predict at prediction_horizon hours after input window
+            y_1h[i] = tokens_array[i+input_length+prediction_horizon-1, target_coin_idx, 0]  # prediction_horizon hours ahead
         
         # Single horizon array: (num_samples,)
         y_single = y_1h
@@ -281,7 +284,7 @@ class SequenceBlock(PipelineBlock):
             total_samples = y.size
             buy_count = class_counts[1] if len(class_counts) > 1 else 0
             no_buy_count = class_counts[0] if len(class_counts) > 0 else 0
-            logger.info(f"    1h horizon - Binary distribution:")
+            logger.info(f"    {prediction_horizon}h horizon - Binary distribution:")
             logger.info(f"      Class 0 (NO-BUY): {no_buy_count:,} ({100*no_buy_count/total_samples:.1f}%)")
             logger.info(f"      Class 1 (BUY): {buy_count:,} ({100*buy_count/total_samples:.1f}%)")
         elif num_classes == 3:
