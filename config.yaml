@@ -98,7 +98,7 @@ training:
   
   # Optimizer settings (optimized for 45% target)
   learning_rate: 0.00015        # Reduced from 0.0003 - much slower start for stability
-  weight_decay: 0.05           # Increased from 0.03 - much stronger L2 regularization
+  weight_decay: 0.2            # Increased from 0.05 to 0.2 - very strong L2 regularization
   max_grad_norm: 0.5           # Tighter gradient clipping to prevent instability
   
   # Regularization (balanced for performance)
