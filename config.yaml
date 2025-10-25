@@ -75,7 +75,7 @@ model:
   num_encoder_layers: 3       # Shared encoder depth
   num_decoder_layers: 3       # XRP decoder depth
   dim_feedforward: 768        # Reduced from 1024
-  dropout: 0.4                # Increased from 0.3 for better regularization
+  dropout: 0.5                # Increased from 0.4 to match training config
   
   # Embeddings and positional encoding
   coin_embedding_dim: 32     # Coin-specific embedding dimension
@@ -98,13 +98,13 @@ training:
   
   # Optimizer settings (optimized for 45% target)
   learning_rate: 0.00015        # Reduced from 0.0003 - much slower start for stability
-  weight_decay: 0.03           # Increased from 0.015 - stronger L2 regularization
+  weight_decay: 0.05           # Increased from 0.03 - much stronger L2 regularization
   max_grad_norm: 0.5           # Tighter gradient clipping to prevent instability
   
   # Regularization (balanced for performance)
-  dropout: 0.4                 # Increased from 0.3 (matches model config)
-  label_smoothing: 0.08        # Moderate smoothing for better generalization
-  gaussian_noise: 0.025        # Increased from 0.015 for noise robustness
+  dropout: 0.5                 # Increased from 0.4 - stronger dropout
+  label_smoothing: 0.12        # Increased from 0.08 - more smoothing
+  gaussian_noise: 0.04         # Increased from 0.025 - more noise augmentation
   
   # Learning rate scheduling
   scheduler: warmup_cosine     # Warmup followed by cosine annealing
