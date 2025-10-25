@@ -384,6 +384,11 @@ class TrainBlock(PipelineBlock):
                 total_correct += batch_correct
                 total_samples += batch_samples
 
+            # Add threshold regularization for binary classification (keep it bounded)
+            if binary_classification and hasattr(model, 'decision_threshold'):
+                threshold_reg = 0.01 * torch.abs(model.decision_threshold)  # L1 penalty to keep threshold near 0
+                loss = loss + threshold_reg
+
             # Backward pass
             loss.backward()
             optimizer.step()
@@ -477,7 +482,16 @@ class TrainBlock(PipelineBlock):
                         # Convert logits to probabilities for class 1 (BUY)
                         prob_dist = torch.softmax(logits, dim=-1)
                         buy_probs = prob_dist[:, 1]
-                        threshold = self.config['inference'].get('single_threshold', 0.70)
+                        
+                        # Use learned threshold if available, otherwise use config threshold
+                        if hasattr(model, 'decision_threshold'):
+                            # decision_threshold starts at 0, so we apply sigmoid to constrain it
+                            learned_threshold = torch.sigmoid(model.decision_threshold).item()
+                            threshold = learned_threshold
+                            logger.debug(f"Using learned threshold: {threshold:.4f}")
+                        else:
+                            threshold = self.config['inference'].get('single_threshold', 0.70)
+                        
                         buy_signals = (buy_probs > threshold).long()
 
                         # Collect for precision calculation

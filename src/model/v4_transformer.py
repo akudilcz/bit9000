@@ -224,6 +224,12 @@ class CryptoTransformerV4(nn.Module):
             'horizon_1h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout)
         })
         
+        # NEW: Learnable threshold for binary classification
+        # This parameter will be optimized during training to find the best decision boundary
+        # Initialized to 0.0 so sigmoid(logit - threshold) ≈ sigmoid(logit)
+        # Can be interpreted as: logit must be > threshold to predict BUY
+        self.decision_threshold = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+        
         self._init_weights()
         
         param_count = self.count_parameters()
