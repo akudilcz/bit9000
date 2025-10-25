@@ -217,46 +217,59 @@ class CryptoTransformerV3(nn.Module):
         coin_indices: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Embed price/volume tokens and add coin embeddings
+        Embed price/volume/indicator tokens and add coin embeddings
         
         Args:
-            x: (batch, seq_len, num_coins, 2) or (batch, seq_len, 2) for single coin
+            x: (batch, seq_len, num_coins, num_channels) or (batch, seq_len, num_channels) for single coin
+               num_channels can be 2 (price, volume) or 5 (price, volume, rsi, macd, bb_position)
             coin_indices: (batch, seq_len, num_coins) or (batch, seq_len) coin IDs
         
         Returns:
             embeddings: (batch, seq_len * num_coins, d_model) or (batch, seq_len, d_model)
         """
         if x.dim() == 4:
-            # Multi-coin input: (batch, seq_len, num_coins, 2)
+            # Multi-coin input: (batch, seq_len, num_coins, num_channels)
             B, L, C, Ch = x.shape
-            assert C == self.num_coins and Ch == 2
+            assert C == self.num_coins, f"Expected {self.num_coins} coins, got {C}"
             
-            # Flatten to (batch, seq_len * num_coins, 2)
-            x_flat = x.reshape(B, L * C, 2)
+            # Flatten to (batch, seq_len * num_coins, num_channels)
+            x_flat = x.reshape(B, L * C, Ch)
             
             # Coin indices: (batch, seq_len * num_coins)
             if coin_indices is None:
-                coin_ids = torch.arange(C, device=x.device).repeat(L)  # [0,1,...,9, 0,1,...,9, ...]
+                coin_ids = torch.arange(C, device=x.device).repeat(L)  # [0,1,...,C-1, 0,1,...,C-1, ...]
                 coin_indices = coin_ids.unsqueeze(0).expand(B, -1)  # (B, L*C)
         else:
-            # Single coin input: (batch, seq_len, 2)
+            # Single coin input: (batch, seq_len, num_channels)
             B, L, Ch = x.shape
-            assert Ch == 2
-            x_flat = x  # (B, L, 2)
+            x_flat = x  # (B, L, num_channels)
             
             if coin_indices is None:
                 # Assume target coin (index 0 by convention)
                 coin_indices = torch.zeros(B, L, dtype=torch.long, device=x.device)
         
-        # Embed price and volume
+        # Embed each channel (handle both 2-channel and 5-channel inputs)
+        # Always use first 2 channels as price and volume
         price_emb = self.price_embedding(x_flat[:, :, 0])  # (B, L*C or L, d_model//4)
         volume_emb = self.volume_embedding(x_flat[:, :, 1])  # (B, L*C or L, d_model//4)
+        
+        # If we have 5 channels, embed the technical indicators too
+        if Ch == 5:
+            rsi_emb = self.price_embedding(x_flat[:, :, 2])  # Reuse price embedding for RSI (0-100 range)
+            macd_emb = self.volume_embedding(x_flat[:, :, 3])  # Reuse volume embedding for MACD
+            bb_emb = self.price_embedding(x_flat[:, :, 4])  # Reuse price embedding for BB position (0-1 range)
         
         # Embed coin IDs
         coin_emb = self.coin_embedding(coin_indices)  # (B, L*C or L, coin_emb_dim)
         
-        # Fuse: price + volume + coin
-        combined = torch.cat([price_emb, volume_emb, coin_emb], dim=-1)
+        # Fuse: price + volume + [indicators] + coin
+        if Ch == 5:
+            # Average the indicator embeddings to keep same dimensionality
+            indicator_avg = (rsi_emb + macd_emb + bb_emb) / 3.0  # (B, L*C or L, d_model//4)
+            combined = torch.cat([price_emb, volume_emb, indicator_avg, coin_emb], dim=-1)
+        else:
+            combined = torch.cat([price_emb, volume_emb, coin_emb], dim=-1)
+        
         embedded = self.channel_fusion(combined)  # (B, L*C or L, d_model)
         
         return embedded
