@@ -8,21 +8,15 @@ data:
   coins:
   - BTC
   - ETH
-  - BNB
-  - XRP
-  - SOL
-  - DOGE
-  - ADA
-  - AVAX
-  - DOT
   - LTC
+  - XRP
   
-  target_coin: BTC  # Coin to predict (BTC is index 0)
+  target_coin: XRP  # Coin to predict (XRP is index 3)
   interval: 1h      # Data interval
   
   # Date range for data collection
-  default_start_date: 2020-10-01
-  default_end_date: 2025-10-01
+  default_start_date: 2018-01-01
+  default_end_date: 2025-10-25
   
   # Data directories
   data_dir: artifacts/step_01_download
@@ -58,8 +52,8 @@ tokenization:
 # SEQUENCE CONFIGURATION
 # =============================================================================
 sequences:
-  input_length: 48   # 48 hours (2 days) of historical context
-  output_length: 48  # Predict 48 hours (2 days) ahead
+  input_length: 24   # 24 hours (1 day) of historical context
+  output_length: 8   # Predict 8 hours ahead
   num_channels: 2    # 0=price, 1=volume
 
 # =============================================================================
@@ -71,21 +65,21 @@ model:
   # Vocabulary and output configuration
   vocab_size: 256      # 256-bin vocabulary for input features
   num_classes: 3       # 3-class output (0=negative, 1=level, 2=positive)
-  num_coins: 10        # Number of coins in dataset
-  target_coin_idx: 0   # BTC is at index 0 (must match data.target_coin)
+  num_coins: 4         # Number of coins in dataset (BTC, ETH, LTC, XRP)
+  target_coin_idx: 3   # XRP is at index 3 (must match data.target_coin)
   
-  # Transformer architecture (optimized from hyperparameter tuning)
-  d_model: 64                # Model dimension
-  nhead: 2                   # Number of attention heads
-  num_encoder_layers: 2      # Encoder depth
-  num_decoder_layers: 1      # Decoder depth
-  dim_feedforward: 256       # Feedforward dimension
-  dropout: 0.7               # Dropout rate - EXTREME regularization (matches training config)
+  # Transformer architecture (balanced capacity for 45% target)
+  d_model: 256                # Model dimension (increased for better representation)
+  nhead: 8                    # Number of attention heads
+  num_encoder_layers: 3       # Encoder depth (increased for better feature extraction)
+  num_decoder_layers: 3       # Decoder depth
+  dim_feedforward: 1024       # Feedforward dimension (increased for better capacity)
+  dropout: 0.3                # Dropout rate (balanced for regularization)
   
   # Embeddings and positional encoding
   coin_embedding_dim: 32     # Coin-specific embedding dimension
-  positional_encoding: learned  # 'learned' or 'sinusoidal'
-  max_seq_len: 1024          # Max sequence length (48h × 10 coins × 2 channels = 960)
+  positional_encoding: sinusoidal  # 'learned' or 'sinusoidal'
+  max_seq_len: 512           # Max sequence length (24h × 4 coins × 2 channels = 192)
   
   # Multi-task learning heads
   multitask_enabled: true    # Enable multi-task learning
@@ -97,30 +91,30 @@ model:
 # =============================================================================
 training:
   device: cuda
-  epochs: 100
-  batch_size: 256  # Optimal from tuning
+  epochs: 150  # Increased from 100 for better convergence
+  batch_size: 128  # Balanced batch size for stability and generalization
   num_workers: 0
   
-  # Optimizer settings (adjusted for better convergence)
-  learning_rate: 0.0001        # VERY LOW - reduced from 0.0005
-  weight_decay: 0.05           # VERY HIGH L2 regularization (5x increase)
-  max_grad_norm: 0.1           # VERY TIGHT gradient clipping
+  # Optimizer settings (optimized for 45% target)
+  learning_rate: 0.0003        # Moderate learning rate for good convergence
+  weight_decay: 0.015          # Balanced L2 regularization
+  max_grad_norm: 1.0           # Standard gradient clipping
   
-  # Regularization (EXTREME to prevent overfitting)
-  dropout: 0.7                 # 70% dropout (very aggressive)
-  label_smoothing: 0.2         # Strong label smoothing
-  gaussian_noise: 0.0          # DISABLED - causing CUDA assertion errors (tokens >= vocab_size)
+  # Regularization (balanced for performance)
+  dropout: 0.3                 # Dropout rate (matches model config)
+  label_smoothing: 0.08        # Moderate smoothing for better generalization
+  gaussian_noise: 0.015        # Light noise augmentation for robustness
   
   # Learning rate scheduling
   scheduler: warmup_cosine     # Warmup followed by cosine annealing
-  warmup_epochs: 20            # Extended warmup period (was 8)
-  min_lr_ratio: 0.01           # Minimum LR as fraction of initial LR
+  warmup_epochs: 5             # Warmup period for stable training
+  min_lr_ratio: 0.00001        # Minimum LR as fraction of initial LR
   
-  # Early stopping
+  # Early stopping (balanced for 45% target)
   early_stopping:
     enabled: true
     patience: 15               # Stop if no improvement for 15 epochs
-    min_delta: 0.00001           # Minimum improvement threshold
+    min_delta: 0.0001          # Minimum improvement threshold
     monitor: val_accuracy      # Metric to monitor
   
   # Loss function configuration

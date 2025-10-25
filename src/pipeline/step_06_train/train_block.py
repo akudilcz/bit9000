@@ -247,12 +247,18 @@ class TrainBlock(PipelineBlock):
             y_batch = y_batch.to(device)
             
             # Add Gaussian noise to input during training (helps escape local minima)
-            # Convert to float, add noise, convert back to long
+            # Convert to float, add noise, round and clamp to valid token range
             if model.training:
-                X_float = X_batch.float()  # Convert to float for noise addition
-                noise_scale = self.config['training'].get('gaussian_noise', 0.05)  # Get from config
-                noise = torch.randn_like(X_float) * noise_scale
-                X_batch_noisy = (X_float + noise).long()  # Add noise and convert back to long
+                noise_scale = self.config['training'].get('gaussian_noise', 0.0)
+                if noise_scale > 0:
+                    vocab_size = self.config['model']['vocab_size']
+                    X_float = X_batch.float()  # Convert to float for noise addition
+                    noise = torch.randn_like(X_float) * noise_scale
+                    X_noisy = X_float + noise
+                    # Round to nearest integer and clamp to valid token range [0, vocab_size-1]
+                    X_batch_noisy = torch.clamp(torch.round(X_noisy), 0, vocab_size - 1).long()
+                else:
+                    X_batch_noisy = X_batch
             else:
                 X_batch_noisy = X_batch
             
