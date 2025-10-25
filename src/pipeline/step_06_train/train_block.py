@@ -14,6 +14,7 @@ from pathlib import Path
 import json
 from typing import Dict, List
 from tqdm import tqdm
+import math
 
 from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import ArtifactMetadata
@@ -117,10 +118,21 @@ class TrainBlock(PipelineBlock):
         criterion = nn.CrossEntropyLoss()  # Multi-class classification
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         
-        # Learning rate scheduler
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5
-        )
+        # Learning rate scheduler with warmup
+        warmup_epochs = train_config.get('warmup_epochs', 5)
+        warmup_start_lr = train_config.get('warmup_start_lr', 1e-6)
+        
+        # Create warmup scheduler followed by cosine annealing
+        def warmup_lr(epoch):
+            if epoch < warmup_epochs:
+                # Linear warmup from warmup_start_lr to learning_rate over warmup_epochs
+                return warmup_start_lr + (learning_rate - warmup_start_lr) * (epoch / warmup_epochs)
+            else:
+                # Cosine annealing after warmup
+                progress = (epoch - warmup_epochs) / (epochs - warmup_epochs)
+                return learning_rate * (0.5 + 0.5 * math.cos(math.pi * progress))
+        
+        scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda e: warmup_lr(e) / learning_rate)
         
         # Training loop
         logger.info("\n[3/4] Training...")
@@ -147,7 +159,7 @@ class TrainBlock(PipelineBlock):
             )
             
             # Update scheduler
-            scheduler.step(val_loss)
+            scheduler.step()
             
             # Record history
             history['train_loss'].append(train_loss)

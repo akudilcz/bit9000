@@ -92,12 +92,12 @@ model:
 # =============================================================================
 training:
   device: cuda
-  epochs: 150  # Increased from 100 for better convergence
+  epochs: 200  # Increased from 150 for more training time
   batch_size: 128  # Balanced batch size for stability and generalization
   num_workers: 0
   
   # Optimizer settings (optimized for 45% target)
-  learning_rate: 0.0003        # Moderate learning rate for good convergence
+  learning_rate: 0.00015        # Reduced from 0.0003 - much slower start for stability
   weight_decay: 0.03           # Increased from 0.015 - stronger L2 regularization
   max_grad_norm: 0.5           # Tighter gradient clipping to prevent instability
   
@@ -108,7 +108,8 @@ training:
   
   # Learning rate scheduling
   scheduler: warmup_cosine     # Warmup followed by cosine annealing
-  warmup_epochs: 5             # Warmup period for stable training
+  warmup_epochs: 15            # Increased from 5 to 15 - much longer warmup period
+  warmup_start_lr: 0.00001     # Very low initial LR for warmup
   min_lr_ratio: 0.00001        # Minimum LR as fraction of initial LR
   
   # Early stopping (balanced for 45% target)
