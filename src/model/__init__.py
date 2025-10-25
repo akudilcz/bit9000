@@ -75,6 +75,7 @@ def create_model(config):
             max_seq_len=model_cfg.get('max_seq_len', 1024),
             target_coin_idx=target_coin_idx,
             btc_coin_idx=btc_idx,
+            binary_classification=model_cfg.get('binary_classification', False),
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}. "

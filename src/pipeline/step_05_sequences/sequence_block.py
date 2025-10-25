@@ -270,10 +270,29 @@ class SequenceBlock(PipelineBlock):
         # Stack all horizons: (num_samples, 4)
         y_multi = np.stack([y_1h, y_2h, y_4h, y_8h], axis=1)
         
-        # Convert 256-bin targets to 3-class labels for each horizon
-        # Use more balanced thresholds based on actual data distribution
+        # Convert 256-bin targets to either 3-class or 2-class (binary) labels
         num_classes = self.config['model'].get('num_classes', 256)
-        if num_classes == 3:
+        binary_classification = self.config['model'].get('binary_classification', False)
+        buy_token_threshold = self.config['model'].get('buy_token_threshold', 171)
+        
+        if binary_classification:
+            # Binary classification: BUY if token >= threshold, else NO-BUY
+            y_binary = np.zeros_like(y_multi, dtype=np.int64)
+            y_binary[y_multi >= buy_token_threshold] = 1  # BUY
+            y_binary[y_multi < buy_token_threshold] = 0   # NO-BUY
+            y = y_binary
+            
+            # Log binary class distribution for each horizon
+            for horizon_idx, horizon_name in enumerate(['1h', '2h', '4h', '8h']):
+                y_horizon = y[:, horizon_idx]
+                class_counts = np.bincount(y_horizon.flatten())
+                total_samples = y_horizon.size
+                buy_count = class_counts[1] if len(class_counts) > 1 else 0
+                no_buy_count = class_counts[0] if len(class_counts) > 0 else 0
+                logger.info(f"    {horizon_name} horizon - Binary distribution:")
+                logger.info(f"      Class 0 (NO-BUY): {no_buy_count:,} ({100*no_buy_count/total_samples:.1f}%)")
+                logger.info(f"      Class 1 (BUY): {buy_count:,} ({100*buy_count/total_samples:.1f}%)")
+        elif num_classes == 3:
             # More balanced thresholds (adjust based on actual token distribution):
             # Class 0 (negative): tokens 0-99 (bottom ~39%)
             # Class 1 (level): tokens 100-155 (middle ~22%) 

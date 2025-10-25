@@ -118,6 +118,15 @@ class TrainBlock(PipelineBlock):
         criterion = nn.CrossEntropyLoss()  # Multi-class classification
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         
+        # Check if using binary classification
+        binary_classification = self.config['model'].get('binary_classification', False)
+        if binary_classification:
+            pos_weight = self.config['training'].get('pos_weight', 5.7)
+            criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
+            logger.info(f"  Using binary classification with pos_weight={pos_weight}")
+        else:
+            logger.info(f"  Using multi-class classification ({self.config['model'].get('num_classes', 256)} classes)")
+        
         # Learning rate scheduler with warmup
         warmup_epochs = train_config.get('warmup_epochs', 5)
         warmup_start_lr = train_config.get('warmup_start_lr', 1e-6)
@@ -289,15 +298,22 @@ class TrainBlock(PipelineBlock):
                 
                 # y_batch shape: (B, 4) for 4 horizons
                 for idx, horizon in enumerate(['horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h']):
-                    logits = outputs[horizon]['logits']  # (B, num_classes)
+                    logits = outputs[horizon]['logits']  # (B, num_classes or 2)
                     y_horizon = y_batch[:, idx]  # (B,)
                     
                     # Compute loss for this horizon with weight
-                    horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
+                    if binary_classification:
+                        # Binary loss: BCEWithLogitsLoss expects (B, 1) logits and (B,) targets as float
+                        y_float = y_horizon.float()
+                        horizon_loss = criterion(logits.squeeze(-1), y_float) * horizon_weights[idx]
+                        predictions = (torch.sigmoid(logits.squeeze(-1)) > 0.5).long()
+                    else:
+                        horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
+                        predictions = torch.argmax(logits, dim=-1)
+                    
                     loss += horizon_loss
                     
                     # Metrics
-                    predictions = torch.argmax(logits, dim=-1)
                     all_correct += (predictions == y_horizon).sum().item()
                     all_samples += y_horizon.numel()
                 
@@ -390,10 +406,16 @@ class TrainBlock(PipelineBlock):
                         logits = outputs[horizon]['logits']
                         y_horizon = y_batch[:, idx]
                         
-                        horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
-                        loss += horizon_loss
+                        if binary_classification:
+                            # Binary loss
+                            y_float = y_horizon.float()
+                            horizon_loss = criterion(logits.squeeze(-1), y_float) * horizon_weights[idx]
+                            predictions = (torch.sigmoid(logits.squeeze(-1)) > 0.5).long()
+                        else:
+                            horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
+                            predictions = torch.argmax(logits, dim=-1)
                         
-                        predictions = torch.argmax(logits, dim=-1)
+                        loss += horizon_loss
                         all_correct += (predictions == y_horizon).sum().item()
                         all_samples += y_horizon.numel()
                     
@@ -444,4 +466,62 @@ class TrainBlock(PipelineBlock):
         avg_acc = total_correct / total_samples
         
         return avg_loss, avg_acc
+    
+    def inference_vote(self, outputs: Dict, voting_strategy: str = 'weighted', 
+                      threshold: float = 0.70, min_agree: int = 3) -> torch.Tensor:
+        """
+        Multi-horizon voting for binary BUY signal generation
+        
+        Combines predictions from 4 horizons (1h, 2h, 4h, 8h) using different voting strategies
+        
+        Args:
+            outputs: dict with 'horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h'
+                    Each contains logits (B, 2) for binary classification
+            voting_strategy: 'strict' (AND), 'majority', 'weighted', 'confidence_and'
+            threshold: Confidence threshold for weighted/confidence_and strategies
+            min_agree: Minimum horizons agreeing for majority/confidence_and
+            
+        Returns:
+            BUY_signals: (B,) binary predictions (0 or 1)
+        """
+        # Get probabilities for class 1 (BUY) for each horizon
+        probs = {}
+        preds = {}
+        for horizon in ['horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h']:
+            logits = outputs[horizon]['logits']  # (B, 2)
+            probs[horizon] = torch.sigmoid(logits[:, 1] if logits.shape[-1] == 2 else logits)
+            preds[horizon] = (probs[horizon] > 0.5).float()
+        
+        if voting_strategy == 'strict':
+            # ALL horizons must predict BUY
+            result = (preds['horizon_1h'] * preds['horizon_2h'] * 
+                     preds['horizon_4h'] * preds['horizon_8h'])
+        
+        elif voting_strategy == 'majority':
+            # 3+ out of 4 must agree on BUY
+            vote_sum = (preds['horizon_1h'] + preds['horizon_2h'] + 
+                       preds['horizon_4h'] + preds['horizon_8h'])
+            result = (vote_sum >= min_agree).float()
+        
+        elif voting_strategy == 'weighted':
+            # Weighted average by horizon importance
+            weights = torch.tensor([1.0, 0.8, 0.6, 0.4], device=probs['horizon_1h'].device)
+            avg_prob = (weights[0] * probs['horizon_1h'] + 
+                       weights[1] * probs['horizon_2h'] +
+                       weights[2] * probs['horizon_4h'] +
+                       weights[3] * probs['horizon_8h']) / weights.sum()
+            result = (avg_prob > threshold).float()
+        
+        elif voting_strategy == 'confidence_and':
+            # Majority voting + high average confidence
+            vote_sum = (preds['horizon_1h'] + preds['horizon_2h'] + 
+                       preds['horizon_4h'] + preds['horizon_8h'])
+            avg_prob = (probs['horizon_1h'] + probs['horizon_2h'] + 
+                       probs['horizon_4h'] + probs['horizon_8h']) / 4.0
+            result = ((vote_sum >= min_agree) & (avg_prob > threshold)).float()
+        
+        else:
+            raise ValueError(f"Unknown voting strategy: {voting_strategy}")
+        
+        return result
 

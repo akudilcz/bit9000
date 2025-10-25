@@ -125,6 +125,7 @@ class CryptoTransformerV4(nn.Module):
         max_seq_len: int = 1024,
         target_coin_idx: int = 3,  # XRP
         btc_coin_idx: int = 0,  # BTC
+        binary_classification: bool = False,  # NEW: Binary BUY/NO-BUY classification
     ):
         super().__init__()
         
@@ -135,6 +136,7 @@ class CryptoTransformerV4(nn.Module):
         self.target_coin_idx = target_coin_idx
         self.btc_coin_idx = btc_coin_idx
         self.max_seq_len = max_seq_len
+        self.binary_classification = binary_classification
         
         # Coin-specific embeddings
         self.coin_embedding = nn.Embedding(num_coins, coin_embedding_dim)
@@ -205,10 +207,10 @@ class CryptoTransformerV4(nn.Module):
         
         # Multi-horizon prediction heads (1h, 2h, 4h, 8h)
         self.horizon_heads = nn.ModuleDict({
-            'horizon_1h': self._make_prediction_head(d_model, num_classes, dropout),
-            'horizon_2h': self._make_prediction_head(d_model, num_classes, dropout),
-            'horizon_4h': self._make_prediction_head(d_model, num_classes, dropout),
-            'horizon_8h': self._make_prediction_head(d_model, num_classes, dropout),
+            'horizon_1h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
+            'horizon_2h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
+            'horizon_4h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
+            'horizon_8h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout),
         })
         
         self._init_weights()
@@ -217,7 +219,7 @@ class CryptoTransformerV4(nn.Module):
         logger.info(f"Initialized CryptoTransformerV4 with {param_count:,} parameters")
         logger.info(f"  Shared Encoder: {num_encoder_layers} layers, BTC Encoder: 2 layers, XRP Decoder: {num_decoder_layers} layers")
         logger.info(f"  d_model: {d_model}, nhead: {nhead}, dim_ff: {dim_feedforward}")
-        logger.info(f"  Multi-horizon: 1h, 2h, 4h, 8h prediction heads")
+        logger.info(f"  Multi-horizon: 1h, 2h, 4h, 8h prediction heads ({'binary BUY/NO-BUY' if binary_classification else f'{num_classes} classes'})")
         logger.info(f"  BTC→XRP dedicated attention pathway enabled")
         logger.info(f"  Time features: hour, day of week, sequence position")
     

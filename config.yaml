@@ -79,13 +79,17 @@ model:
   
   # Embeddings and positional encoding
   coin_embedding_dim: 32     # Coin-specific embedding dimension
-  positional_encoding: learned   # 'learned' or 'sinusoidal' - learned better for multi-horizon
+  positional_encoding: sinusoidal   # 'learned' or 'sinusoidal' - learned better for multi-horizon
   max_seq_len: 1024          # Max sequence length (48h × 4 coins × 5 channels = 960)
   
   # V4 Specific Features
   multi_horizon_enabled: true  # Enable 1h, 2h, 4h, 8h predictions
   btc_attention_enabled: true  # Enable BTC→XRP dedicated attention pathway
   time_features_enabled: true  # Enable cyclical time encoding (hour, day of week)
+  
+  # NEW: Binary classification for BUY signals
+  binary_classification: true  # Convert 256-class to 2-class (BUY/NO-BUY)
+  buy_token_threshold: 171     # Tokens 171-255 are "BUY" class
 
 # =============================================================================
 # TRAINING CONFIGURATION
@@ -123,6 +127,10 @@ training:
   loss_type: cross_entropy     # Loss type: 'cross_entropy', 'smooth_ordinal', 'ordinal', 'distance_weighted'
   use_class_weights: true      # Enable automatic class weighting for imbalanced data
   
+  # NEW: Binary classification loss parameters
+  binary_loss_type: bce_with_logits  # Use BCEWithLogitsLoss for binary classification
+  pos_weight: 5.7              # Upweight minority (BUY) class in binary classification
+  
   # Alternative loss function parameters (used if loss_type is changed)
   ordinal_sigma: 5.0           # For smooth_ordinal: Gaussian smoothing sigma
   ordinal_margin: 0.5          # For ordinal: Soft margin for constraints
@@ -145,6 +153,16 @@ training:
 inference:
   num_steps: 8                 # Number of autoregressive prediction steps
   sampling: argmax             # Sampling strategy: 'argmax' or 'sample'
+  
+  # NEW: Multi-horizon voting for binary BUY classification
+  voting_strategy: weighted    # 'strict', 'majority', 'weighted', 'confidence_and'
+  voting_threshold: 0.70       # Confidence threshold for weighted/confidence_and strategies
+  min_horizons_agree: 3        # Minimum horizons that must agree for majority/confidence_and
+  horizon_weights:
+    horizon_1h: 1.0            # 1h prediction weight (most important)
+    horizon_2h: 0.8
+    horizon_4h: 0.6
+    horizon_8h: 0.4            # 8h prediction weight (least important)
 
 # =============================================================================
 # LOGGING CONFIGURATION
