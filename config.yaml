@@ -71,11 +71,11 @@ model:
   btc_coin_idx: 0      # BTC is at index 0 for dedicated pathway
   
   # Transformer architecture (increased for better multi-horizon learning)
-  d_model: 208                # Reduced from 256 for better regularization on 4-coin dataset
-  nhead: 4                    # Reduced from 8 to 4 heads (fewer parameters, less overfitting)
-  num_encoder_layers: 8       # Increased from 3 to 8 - shared encoder depth
-  num_decoder_layers: 8       # Increased from 3 to 8 - XRP decoder depth
-  dim_feedforward: 768        # Reduced from 1024
+  d_model: 64                     # Tuned: was 208
+  nhead: 4                        # Tuned: was 4 (unchanged)
+  num_encoder_layers: 3           # Tuned: was 8
+  num_decoder_layers: 2           # Tuned: was 8
+  dim_feedforward: 512            # Tuned: was 768
   dropout: 0.5                # Increased from 0.4 to match training config
   
   # Embeddings and positional encoding
@@ -97,32 +97,32 @@ model:
 # =============================================================================
 training:
   device: cuda
-  epochs: 200  # Increased from 150 for more training time
-  batch_size: 128  # Balanced batch size for stability and generalization
+  epochs: 200
+  batch_size: 128  # From tuning: 128
   num_workers: 0
   
-  # Optimizer settings (optimized for 45% target)
-  learning_rate: 0.00015        # Reduced from 0.0003 - much slower start for stability
-  weight_decay: 0.2            # Increased from 0.05 to 0.2 - very strong L2 regularization
-  max_grad_norm: 0.5           # Tighter gradient clipping to prevent instability
+  # Optimizer settings (tuned by Optuna - Trial 10)
+  learning_rate: 0.0010261451916475542  # Tuned: was 0.00015
+  weight_decay: 0.0006853552885259012   # Tuned: was 0.2
+  max_grad_norm: 1.4810708260893037     # Tuned: was 0.5
   
-  # Regularization (balanced for performance)
-  dropout: 0.5                 # Increased from 0.4 - stronger dropout
-  label_smoothing: 0.12        # Increased from 0.08 - more smoothing
-  gaussian_noise: 0.04         # Increased from 0.025 - more noise augmentation
+  # Regularization (tuned by Optuna)
+  dropout: 0.24920769223170258          # Tuned: was 0.5
+  label_smoothing: 0.011616568805333773 # Tuned: was 0.12
+  gaussian_noise: 0.08705283040432205   # Tuned: was 0.04
   
   # Learning rate scheduling
-  scheduler: warmup_cosine     # Warmup followed by cosine annealing
-  warmup_epochs: 15            # Increased from 5 to 15 - much longer warmup period
-  warmup_start_lr: 0.00001     # Very low initial LR for warmup
-  min_lr_ratio: 0.00001        # Minimum LR as fraction of initial LR
+  scheduler: warmup_cosine
+  warmup_epochs: 3                       # Tuned: was 15
+  warmup_start_lr: 0.00001
+  min_lr_ratio: 0.00001
   
-  # Early stopping (balanced for 45% target)
+  # Early stopping
   early_stopping:
     enabled: true
-    patience: 15               # Stop if no improvement for 15 epochs
-    min_delta: 0.0001          # Minimum improvement threshold
-    monitor: val_accuracy      # Metric to monitor
+    patience: 15
+    min_delta: 0.0001
+    monitor: val_accuracy
   
   # Loss function configuration
   loss_type: cross_entropy     # Loss type: 'cross_entropy', 'smooth_ordinal', 'ordinal', 'distance_weighted'
