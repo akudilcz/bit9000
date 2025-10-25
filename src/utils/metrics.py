@@ -1,8 +1,79 @@
-"""Evaluation metrics for model performance"""
+"""Performance metrics for model evaluation"""
 
+import torch
 import numpy as np
-from typing import Dict, List, Tuple
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
+from typing import Tuple, Dict
+
+
+def exact_accuracy(predictions: np.ndarray, targets: np.ndarray) -> float:
+    """Exact match accuracy (standard metric)"""
+    return np.mean(predictions == targets)
+
+
+def soft_accuracy(predictions: np.ndarray, targets: np.ndarray, tolerance: int = 1) -> float:
+    """
+    Soft accuracy: predictions within 'tolerance' distance are considered correct.
+    
+    Example: If tolerance=1, then predicting 56 when true is 57 is considered correct.
+    
+    Args:
+        predictions: Predicted token indices (0-255)
+        targets: True token indices (0-255)
+        tolerance: Allow predictions within this distance (default: 1)
+    
+    Returns:
+        Accuracy as fraction
+    """
+    distances = np.abs(predictions - targets)
+    return np.mean(distances <= tolerance)
+
+
+def mean_absolute_error(predictions: np.ndarray, targets: np.ndarray) -> float:
+    """Mean absolute error in token distance"""
+    return np.mean(np.abs(predictions - targets))
+
+
+def mean_squared_error(predictions: np.ndarray, targets: np.ndarray) -> float:
+    """Mean squared error in token distance"""
+    return np.mean((predictions - targets) ** 2)
+
+
+def ordinal_accuracy_curve(predictions: np.ndarray, targets: np.ndarray) -> Dict[int, float]:
+    """
+    Compute accuracy for different tolerance levels.
+    
+    Returns dict mapping tolerance -> accuracy
+    
+    Example:
+        {0: 0.42, 1: 0.65, 2: 0.78, 5: 0.92, 10: 0.98}
+    """
+    distances = np.abs(predictions - targets)
+    curve = {}
+    for tol in [0, 1, 2, 3, 5, 10, 20, 50]:
+        curve[tol] = np.mean(distances <= tol)
+    return curve
+
+
+def rank_correlation(predictions: np.ndarray, targets: np.ndarray) -> float:
+    """
+    Spearman rank correlation between predictions and targets.
+    Measures if predictions are ranked in same order as targets.
+    """
+    from scipy.stats import spearmanr
+    corr, _ = spearmanr(predictions, targets)
+    return corr
+
+
+def directional_accuracy(predictions: np.ndarray, targets: np.ndarray) -> float:
+    """
+    Fraction of predictions in same direction as targets.
+    Useful for price movement: is prediction going up/down correctly?
+    
+    Direction: < 128 = down, >= 128 = up
+    """
+    pred_direction = predictions >= 128
+    target_direction = targets >= 128
+    return np.mean(pred_direction == target_direction)
 
 
 class MetricsCalculator:
@@ -28,7 +99,7 @@ class MetricsCalculator:
         Returns:
             Accuracy score
         """
-        return accuracy_score(y_true.flatten(), y_pred.flatten())
+        return np.mean(y_true == y_pred)
     
     def calculate_directional_accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """
@@ -52,7 +123,7 @@ class MetricsCalculator:
         true_dir = to_direction(y_true)
         pred_dir = to_direction(y_pred)
         
-        return accuracy_score(true_dir.flatten(), pred_dir.flatten())
+        return np.mean(true_dir == pred_dir)
     
     def calculate_per_class_accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
         """
@@ -74,7 +145,7 @@ class MetricsCalculator:
             mask = y_true_flat == class_idx
             if mask.sum() > 0:
                 # Calculate accuracy only for this class
-                class_acc = accuracy_score(y_true_flat[mask], y_pred_flat[mask])
+                class_acc = np.mean(y_true_flat[mask] == y_pred_flat[mask])
                 class_accuracies[f'accuracy_class_{class_idx}'] = class_acc
             else:
                 class_accuracies[f'accuracy_class_{class_idx}'] = 0.0
@@ -102,9 +173,8 @@ class MetricsCalculator:
         actionable_mask = y_true_flat != hold_class
         
         if actionable_mask.sum() > 0:
-            actionable_acc = accuracy_score(
-                y_true_flat[actionable_mask], 
-                y_pred_flat[actionable_mask]
+            actionable_acc = np.mean(
+                y_true_flat[actionable_mask] == y_pred_flat[actionable_mask]
             )
         else:
             actionable_acc = 0.0
@@ -115,7 +185,7 @@ class MetricsCalculator:
             if class_idx != hold_class:
                 mask = y_true_flat == class_idx
                 if mask.sum() > 0:
-                    class_acc = accuracy_score(y_true_flat[mask], y_pred_flat[mask])
+                    class_acc = np.mean(y_true_flat[mask] == y_pred_flat[mask])
                     sell_buy_accuracies[f'accuracy_class_{class_idx}'] = class_acc
                 else:
                     sell_buy_accuracies[f'accuracy_class_{class_idx}'] = 0.0
@@ -137,6 +207,7 @@ class MetricsCalculator:
         Returns:
             Dictionary with precision, recall, f1-score arrays
         """
+        from sklearn.metrics import precision_recall_fscore_support
         precision, recall, f1, support = precision_recall_fscore_support(
             y_true.flatten(), 
             y_pred.flatten(),
@@ -164,13 +235,13 @@ class MetricsCalculator:
             Array of accuracies per coin
         """
         if len(y_true.shape) == 1 or y_true.shape[1] == 1:
-            return np.array([accuracy_score(y_true, y_pred)])
+            return np.array([np.mean(y_true == y_pred)])
         
         num_coins = y_true.shape[1]
         accuracies = np.zeros(num_coins)
         
         for i in range(num_coins):
-            accuracies[i] = accuracy_score(y_true[:, i], y_pred[:, i])
+            accuracies[i] = np.mean(y_true[:, i] == y_pred[:, i])
         
         return accuracies
     
@@ -185,6 +256,7 @@ class MetricsCalculator:
         Returns:
             Confusion matrix
         """
+        from sklearn.metrics import confusion_matrix
         return confusion_matrix(
             y_true.flatten(), 
             y_pred.flatten(),

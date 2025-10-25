@@ -97,6 +97,169 @@ class WarmupCallback(Callback):
         self.current_epoch_count += 1
 
 
+class OrdinalRegressionLoss(nn.Module):
+    """
+    Ordinal regression loss that penalizes based on distance from true class.
+    
+    For a 256-class problem, predicting 56 instead of 57 should be much better
+    than predicting 10 or 200. This loss treats tokens as having an inherent order.
+    
+    Philosophy: Convert ordinal classification to cumulative probabilities.
+    For K classes (0 to K-1), we learn K-1 cumulative probabilities:
+    P(y ≤ 0), P(y ≤ 1), ..., P(y ≤ K-2)
+    
+    Then: P(y = k) = P(y ≤ k) - P(y ≤ k-1)
+    """
+    
+    def __init__(self, num_classes: int, margin: float = 0.5):
+        """
+        Args:
+            num_classes: Number of classes (256)
+            margin: Soft margin for ordinal constraint (default: 0.5)
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.margin = margin
+    
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            logits: (batch, num_classes) raw model outputs
+            targets: (batch,) target class indices (0 to num_classes-1)
+        
+        Returns:
+            Scalar loss
+        """
+        # Convert logits to probabilities for cumulative distribution
+        probs = torch.sigmoid(logits)  # (batch, num_classes)
+        
+        # Cumulative probabilities: P(y <= k)
+        cumprobs = torch.cumsum(probs, dim=1)  # (batch, num_classes)
+        
+        # Ordinal loss: penalize based on distance
+        # If true class is k, we want:
+        # - P(y <= j) high for j >= k (classes at or after target)
+        # - P(y <= j) low for j < k (classes before target)
+        
+        batch_size = targets.size(0)
+        loss = 0.0
+        
+        for i in range(batch_size):
+            true_class = targets[i].item()
+            
+            # Penalize if j < true_class and P(y <= j) is too high
+            if true_class > 0:
+                loss += torch.sum(torch.clamp(cumprobs[i, :true_class], min=self.margin) - self.margin)
+            
+            # Penalize if j >= true_class and P(y <= j) is too low
+            if true_class < self.num_classes - 1:
+                loss += torch.sum(torch.clamp(1.0 - cumprobs[i, true_class:], min=self.margin) - self.margin)
+        
+        return loss / batch_size
+
+
+class SmoothOrdinalLoss(nn.Module):
+    """
+    Smooth ordinal loss using soft labels based on distance.
+    
+    Creates soft target distribution where nearby classes get high probability
+    and distant classes get low probability. Much simpler than ordinal regression.
+    
+    Example: If true class is 100, then:
+    - Class 100 gets label 1.0
+    - Class 99, 101 get label ~0.8
+    - Class 98, 102 get label ~0.6
+    - etc.
+    """
+    
+    def __init__(self, num_classes: int, sigma: float = 5.0):
+        """
+        Args:
+            num_classes: Number of classes (256)
+            sigma: Standard deviation of Gaussian smoothing (wider = more smoothing)
+                   Default 5.0 means distance of 5 tokens gets ~0.6 probability
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.sigma = sigma
+        self.criterion = nn.KLDivLoss(reduction='batchmean')
+    
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            logits: (batch, num_classes) raw model outputs
+            targets: (batch,) target class indices
+        
+        Returns:
+            Scalar loss
+        """
+        batch_size = targets.size(0)
+        device = logits.device
+        
+        # Create soft label distribution for each sample
+        soft_targets = torch.zeros_like(logits)
+        
+        for i in range(batch_size):
+            true_class = targets[i].item()
+            # Gaussian centered at true_class
+            distances = torch.arange(self.num_classes, device=device, dtype=torch.float32) - true_class
+            soft_targets[i] = torch.exp(-distances.pow(2) / (2 * self.sigma ** 2))
+            # Normalize
+            soft_targets[i] = soft_targets[i] / soft_targets[i].sum()
+        
+        # Compute KL divergence between soft targets and model predictions
+        log_probs = torch.log_softmax(logits, dim=1)
+        loss = self.criterion(log_probs, soft_targets)
+        
+        return loss
+
+
+class DistanceWeightedCrossEntropy(nn.Module):
+    """
+    Standard cross-entropy but penalize based on distance from true class.
+    
+    Loss = -log(p_true) * (1 + alpha * distance)
+    
+    This is simpler than ordinal regression but still rewards nearby predictions.
+    """
+    
+    def __init__(self, num_classes: int, alpha: float = 0.01):
+        """
+        Args:
+            num_classes: Number of classes (256)
+            alpha: Distance weight (higher = more penalty for distance)
+                   Default 0.01 means distance of 10 gets ~10% extra penalty
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.alpha = alpha
+    
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            logits: (batch, num_classes)
+            targets: (batch,)
+        
+        Returns:
+            Scalar loss
+        """
+        # Standard cross entropy
+        log_probs = torch.log_softmax(logits, dim=1)
+        ce_loss = torch.nn.functional.nll_loss(log_probs, targets, reduction='none')
+        
+        # Get predicted classes
+        preds = torch.argmax(logits, dim=1)
+        
+        # Compute distance-based weights
+        distances = torch.abs(preds.float() - targets.float())
+        distance_weights = 1.0 + self.alpha * distances
+        
+        # Apply distance weights
+        weighted_loss = ce_loss * distance_weights
+        
+        return weighted_loss.mean()
+
+
 class CryptoLightningModule(LightningModule):
     """PyTorch Lightning module for crypto prediction"""
     
@@ -112,12 +275,31 @@ class CryptoLightningModule(LightningModule):
         loss_type = self.training_config.get('loss_type', 'cross_entropy')
         label_smoothing = self.training_config.get('label_smoothing', 0.0)
         
-        # Standard Cross Entropy Loss (no Focal Loss for MVP)
-        self.criterion = nn.CrossEntropyLoss(
-            weight=None,  # Will be set later if use_class_weights=True
-            label_smoothing=label_smoothing
-        )
-        logger.info(f"Using CrossEntropyLoss (label_smoothing={label_smoothing})")
+        # Initialize appropriate loss function
+        if loss_type == 'smooth_ordinal':
+            sigma = self.training_config.get('ordinal_sigma', 5.0)
+            self.criterion = SmoothOrdinalLoss(num_classes=self.num_classes, sigma=sigma)
+            logger.info(f"Using SmoothOrdinalLoss (sigma={sigma})")
+            logger.info("  -> Nearby token predictions will be rewarded")
+        
+        elif loss_type == 'ordinal':
+            margin = self.training_config.get('ordinal_margin', 0.5)
+            self.criterion = OrdinalRegressionLoss(num_classes=self.num_classes, margin=margin)
+            logger.info(f"Using OrdinalRegressionLoss (margin={margin})")
+            logger.info("  -> Distance-aware ordinal constraints")
+        
+        elif loss_type == 'distance_weighted':
+            alpha = self.training_config.get('distance_alpha', 0.01)
+            self.criterion = DistanceWeightedCrossEntropy(num_classes=self.num_classes, alpha=alpha)
+            logger.info(f"Using DistanceWeightedCrossEntropy (alpha={alpha})")
+            logger.info("  -> Cross-entropy weighted by prediction distance")
+        
+        else:  # Default: cross_entropy
+            self.criterion = nn.CrossEntropyLoss(
+                weight=None,  # Will be set later if use_class_weights=True
+                label_smoothing=label_smoothing
+            )
+            logger.info(f"Using CrossEntropyLoss (label_smoothing={label_smoothing})")
         
         self.monitor_metric = 'val_loss'
         

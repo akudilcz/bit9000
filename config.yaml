@@ -70,6 +70,26 @@ training:
   max_grad_norm: 1.4853855763047719  # Best from tuning
   gaussian_noise: 0.07787884922761708  # Best from tuning: input Gaussian noise scale for regularization
   num_workers: 0
+  
+  # LOSS FUNCTION CONFIGURATION
+  # Choose one: 'cross_entropy', 'smooth_ordinal', 'ordinal', 'distance_weighted'
+  loss_type: smooth_ordinal  # RECOMMENDED: smooth ordinal loss rewards nearby predictions
+  
+  # Smooth Ordinal Loss parameters (used if loss_type: smooth_ordinal)
+  # Sigma controls how "smooth" the target distribution is
+  # Smaller sigma = stricter (only nearby tokens rewarded)
+  # Larger sigma = more lenient (distant tokens get some reward)
+  ordinal_sigma: 5.0  # Distance of ~5 tokens gets ~0.6 probability. Try 3-10.
+  
+  # Ordinal Regression Loss parameters (used if loss_type: ordinal)
+  ordinal_margin: 0.5  # Soft margin for ordinal constraints
+  
+  # Distance Weighted Cross Entropy parameters (used if loss_type: distance_weighted)
+  # Alpha controls penalty for distance: loss *= (1 + alpha * distance)
+  # Smaller alpha = less penalty for distance
+  # Larger alpha = more penalty for distance
+  distance_alpha: 0.01  # 10% extra penalty per token distance. Try 0.005-0.05.
+  
   early_stopping:
     enabled: true
     patience: 40  # INCREASED: from 20 to 40 (allow more epochs without improvement)
