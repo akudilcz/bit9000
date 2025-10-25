@@ -533,14 +533,27 @@ class TrainBlock(PipelineBlock):
 
             # BUY precision: TP / (TP + FP) = correct BUY predictions / total BUY predictions
             buy_pred_mask = buy_predictions == 1
-            if buy_pred_mask.sum() > 0:  # Avoid division by zero
-                buy_precision = (buy_targets[buy_pred_mask] == 1).mean()
+            total_buy_signals = buy_pred_mask.sum()
+            
+            if total_buy_signals > 0:  # Avoid division by zero
+                correct_buy = (buy_targets[buy_pred_mask] == 1).sum()
+                buy_precision = correct_buy / total_buy_signals
             else:
+                correct_buy = 0
                 buy_precision = 0.0
 
-            buy_signal_rate = buy_pred_mask.mean()
+            buy_signal_rate = total_buy_signals / len(buy_predictions) * 100
 
-            logger.info(f"  BUY Precision: {buy_precision:.3f} ({buy_pred_mask.sum()}/{len(buy_predictions)} signals = {buy_signal_rate:.3f} rate)")
+            # Clear logging
+            logger.info(f"  ========== BUY SIGNAL ANALYSIS ==========")
+            logger.info(f"  Total val samples: {len(buy_predictions)}")
+            logger.info(f"  BUY signals issued: {total_buy_signals} ({buy_signal_rate:.1f}%)")
+            if total_buy_signals > 0:
+                logger.info(f"  Correct BUY calls: {correct_buy}/{total_buy_signals}")
+                logger.info(f"  ✓ BUY PRECISION: {buy_precision:.1%} (when we say BUY, we're right {buy_precision:.1%} of the time)")
+            else:
+                logger.info(f"  ✓ BUY PRECISION: N/A (no BUY signals issued)")
+            logger.info(f"  ==========================================")
 
             return avg_loss, avg_acc, buy_precision
 
