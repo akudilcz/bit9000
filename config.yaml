@@ -57,34 +57,35 @@ sequences:
   num_channels: 5    # 0=price, 1=volume, 2=rsi, 3=macd, 4=bb_position
 
 # =============================================================================
-# MODEL ARCHITECTURE - CryptoTransformerV3
+# MODEL ARCHITECTURE - CryptoTransformerV4
 # =============================================================================
 model:
-  type: CryptoTransformerV3  # Encoder-Decoder with multi-task learning
+  type: CryptoTransformerV4  # Multi-horizon with BTC→XRP attention and time features
   
   # Vocabulary and output configuration
   vocab_size: 256      # 256-bin vocabulary for input features
   num_classes: 3       # 3-class output (0=negative, 1=level, 2=positive)
   num_coins: 4         # Number of coins in dataset (BTC, ETH, LTC, XRP)
   target_coin_idx: 3   # XRP is at index 3 (must match data.target_coin)
+  btc_coin_idx: 0      # BTC is at index 0 for dedicated pathway
   
-  # Transformer architecture (balanced capacity for 45% target)
-  d_model: 256                # Model dimension (increased for better representation)
+  # Transformer architecture (increased for better multi-horizon learning)
+  d_model: 256                # Model dimension for richer representations
   nhead: 8                    # Number of attention heads
-  num_encoder_layers: 3       # Encoder depth (increased for better feature extraction)
-  num_decoder_layers: 3       # Decoder depth
-  dim_feedforward: 1024       # Feedforward dimension (increased for better capacity)
-  dropout: 0.3                # Dropout rate (balanced for regularization)
+  num_encoder_layers: 3       # Shared encoder depth
+  num_decoder_layers: 3       # XRP decoder depth
+  dim_feedforward: 1024       # Feedforward dimension
+  dropout: 0.3                # Dropout rate
   
   # Embeddings and positional encoding
   coin_embedding_dim: 32     # Coin-specific embedding dimension
-  positional_encoding: sinusoidal  # 'learned' or 'sinusoidal'
+  positional_encoding: learned   # 'learned' or 'sinusoidal' - learned better for multi-horizon
   max_seq_len: 1024          # Max sequence length (48h × 4 coins × 5 channels = 960)
   
-  # Multi-task learning heads
-  multitask_enabled: true    # Enable multi-task learning
-  enable_regression: true    # Regression head for expected token value
-  enable_quantiles: false    # Quantile prediction heads (disabled)
+  # V4 Specific Features
+  multi_horizon_enabled: true  # Enable 1h, 2h, 4h, 8h predictions
+  btc_attention_enabled: true  # Enable BTC→XRP dedicated attention pathway
+  time_features_enabled: true  # Enable cyclical time encoding (hour, day of week)
 
 # =============================================================================
 # TRAINING CONFIGURATION
