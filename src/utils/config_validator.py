@@ -16,30 +16,8 @@ class ConfigValidator:
         ('data', 'target_coin'),
         ('data', 'interval'),
         
-        # Binning configuration
-        ('binning', 'lookback_hours'),
-        ('binning', 'target_shift_hours'),
-        ('binning', 'num_bins'),
-        ('binning', 'method'),
-        ('binning', 'quartiles'),
-        ('binning', 'labels'),
-        ('binning', 'feature_engineering_params'),
-        ('binning', 'feature_engineering_params', 'epsilon'),
-        ('binning', 'feature_engineering_params', 'max_ratio'),
-        ('binning', 'feature_engineering_params', 'max_volume_ratio'),
-        ('binning', 'feature_engineering_params', 'rsi_period'),
-        ('binning', 'feature_engineering_params', 'rsi_min_periods'),
-        ('binning', 'feature_engineering_params', 'rsi_default'),
-        ('binning', 'feature_engineering_params', 'vol_window'),
-        ('binning', 'feature_engineering_params', 'vol_min_periods'),
-        ('binning', 'feature_engineering_params', 'momentum_4h'),
-        ('binning', 'feature_engineering_params', 'momentum_24h'),
-        
         # Model configuration
         ('model', 'num_coins'),
-        ('model', 'num_target_coins'),
-        ('model', 'features_per_coin'),
-        ('model', 'sequence_length'),
         ('model', 'num_classes'),
         ('model', 'vocab_size'),
         

@@ -12,6 +12,7 @@ import numpy as np
 import json
 from pathlib import Path
 from typing import Dict, Tuple
+import matplotlib.pyplot as plt
 
 from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import SplitDataArtifact, ArtifactMetadata
@@ -153,6 +154,9 @@ class TokenizeBlock(PipelineBlock):
         with open(bin_edges_path, 'w') as f:
             json.dump(bin_edges_serializable, f, indent=2)
         logger.info(f"  Saved bin edges: {bin_edges_path}")
+        
+        # Create token distribution visualization
+        self._plot_token_distribution(token_distribution, vocab_size, block_dir)
         
         # Create artifact
         num_channels = 2  # price + volume
@@ -347,4 +351,68 @@ class TokenizeBlock(PipelineBlock):
             i: {'train': train_ratios[i], 'val': val_ratios[i]}
             for i in range(vocab_size)
         }
+    
+    def _plot_token_distribution(self, token_distribution: Dict[int, Dict[str, float]], 
+                                 vocab_size: int, block_dir: Path):
+        """
+        Create a visualization of the token distribution
+        
+        Args:
+            token_distribution: Dictionary {token: {train: ratio, val: ratio}}
+            vocab_size: Number of tokens (256)
+            block_dir: Directory to save the plot
+        """
+        plot_path = block_dir / "token_distribution.png"
+        
+        # Extract data
+        tokens = list(range(vocab_size))
+        train_percentages = [token_distribution.get(i, {}).get('train', 0) * 100 for i in tokens]
+        val_percentages = [token_distribution.get(i, {}).get('val', 0) * 100 for i in tokens]
+        expected_pct = (1.0 / vocab_size) * 100
+        
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+        
+        # Plot 1: Bar chart of distribution
+        bar_width = 0.8
+        ax1.bar(tokens, train_percentages, width=bar_width, alpha=0.7, label='Train', color='#2E86AB')
+        ax1.bar(tokens, val_percentages, width=bar_width, alpha=0.5, label='Val', color='#A23B72')
+        ax1.axhline(y=expected_pct, color='red', linestyle='--', linewidth=1.5, 
+                   label=f'Expected Uniform ({expected_pct:.3f}%)', alpha=0.7)
+        
+        ax1.set_xlabel('Token ID (0-255)', fontsize=12, fontweight='bold')
+        ax1.set_ylabel('Percentage (%)', fontsize=12, fontweight='bold')
+        ax1.set_title('Token Distribution: Train vs Val', fontsize=14, fontweight='bold', pad=20)
+        ax1.legend(loc='upper right', fontsize=10)
+        ax1.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
+        ax1.set_xlim(-5, vocab_size + 5)
+        
+        # Add statistics text
+        train_min, train_max = min(train_percentages), max(train_percentages)
+        val_min, val_max = min(val_percentages), max(val_percentages)
+        stats_text = (
+            f'Train: min={train_min:.3f}%, max={train_max:.3f}%, range={train_max-train_min:.3f}%\n'
+            f'Val: min={val_min:.3f}%, max={val_max:.3f}%, range={val_max-val_min:.3f}%'
+        )
+        ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, 
+                fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', 
+                facecolor='wheat', alpha=0.5))
+        
+        # Plot 2: Histogram of percentage values
+        ax2.hist(train_percentages, bins=30, alpha=0.7, label='Train', color='#2E86AB', edgecolor='black')
+        ax2.hist(val_percentages, bins=30, alpha=0.5, label='Val', color='#A23B72', edgecolor='black')
+        ax2.axvline(x=expected_pct, color='red', linestyle='--', linewidth=2, 
+                   label=f'Expected ({expected_pct:.3f}%)', alpha=0.7)
+        
+        ax2.set_xlabel('Token Percentage (%)', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Frequency (# of tokens)', fontsize=12, fontweight='bold')
+        ax2.set_title('Distribution of Token Frequencies', fontsize=14, fontweight='bold', pad=20)
+        ax2.legend(loc='upper right', fontsize=10)
+        ax2.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
+        
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        logger.info(f"  Saved token distribution plot: {plot_path}")
 

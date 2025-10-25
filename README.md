@@ -72,8 +72,11 @@ The model uses a 9-step pipeline:
 
 ## Architecture
 
-**Model**: `SimpleTokenPredictor` (Transformer Decoder-Only)
-- **Input**: 24 hours × 10 coins × 2 channels (price + volume)
+**Models**: Three transformer architectures (V1, V2, V3)
+- **CryptoTransformerV1**: Decoder-only baseline (~8M params)
+- **CryptoTransformerV2**: Enhanced decoder with multi-coin attention (~471K params)
+- **CryptoTransformerV3**: Encoder-decoder with multi-task learning (~26M params)
+- **Input**: 336 hours × 10 coins × 2 channels (price + volume)
 - **Output**: 1 hour next-token prediction (256 classes), autoregressively generated to 8 hours
 - **Layers**: 2 transformer decoder layers
 - **Heads**: 4 attention heads

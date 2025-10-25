@@ -13,6 +13,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from pathlib import Path
 import json
 from typing import Dict, List
+from tqdm import tqdm
 
 from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import ArtifactMetadata
@@ -118,7 +119,7 @@ class TrainBlock(PipelineBlock):
         
         # Learning rate scheduler
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5, verbose=True
+            optimizer, mode='min', factor=0.5, patience=5
         )
         
         # Training loop
@@ -238,7 +239,10 @@ class TrainBlock(PipelineBlock):
         total_correct = 0
         total_samples = 0
         
-        for X_batch, y_batch in data_loader:
+        # Create progress bar
+        pbar = tqdm(data_loader, desc='Training', leave=False, ncols=100)
+        
+        for X_batch, y_batch in pbar:
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
             
@@ -254,7 +258,13 @@ class TrainBlock(PipelineBlock):
             
             optimizer.zero_grad()
             # Forward pass with correct teacher forcing (model handles shifting)
-            logits = model(X_batch_noisy, targets=y_batch)  # (B, vocab_size) for single-step prediction
+            outputs = model(X_batch_noisy)  # V1/V2: tensor, V3: dict
+            
+            # Handle V3 (dict) vs V1/V2 (tensor) outputs
+            if isinstance(outputs, dict):
+                logits = outputs['logits']  # V3: extract logits from dict
+            else:
+                logits = outputs  # V1/V2: already logits
 
             # Handle both old (B, T, C) and new (B, C) output shapes
             if len(logits.shape) == 3:
@@ -280,9 +290,16 @@ class TrainBlock(PipelineBlock):
             
             # Metrics
             predictions = torch.argmax(logits_flat, dim=-1)
+            batch_correct = (predictions == y_flat).sum().item()
+            batch_samples = y_flat.numel()
+            batch_acc = batch_correct / batch_samples
+            
             total_loss += loss.item() * X_batch.size(0)
-            total_correct += (predictions == y_flat).sum().item()
-            total_samples += y_flat.numel()
+            total_correct += batch_correct
+            total_samples += batch_samples
+            
+            # Update progress bar
+            pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_acc:.4f}'})
         
         avg_loss = total_loss / len(data_loader.dataset)
         avg_acc = total_correct / total_samples
@@ -296,13 +313,22 @@ class TrainBlock(PipelineBlock):
         total_correct = 0
         total_samples = 0
         
+        # Create progress bar
+        pbar = tqdm(data_loader, desc='Validation', leave=False, ncols=100)
+        
         with torch.no_grad():
-            for X_batch, y_batch in data_loader:
+            for X_batch, y_batch in pbar:
                 X_batch = X_batch.to(device)
                 y_batch = y_batch.to(device)
                 
                 # Forward pass to get logits
-                logits = model(X_batch, targets=y_batch)  # (B, vocab_size) for single-step
+                outputs = model(X_batch)  # V1/V2: tensor, V3: dict
+                
+                # Handle V3 (dict) vs V1/V2 (tensor) outputs
+                if isinstance(outputs, dict):
+                    logits = outputs['logits']  # V3: extract logits from dict
+                else:
+                    logits = outputs  # V1/V2: already logits
                 
                 # Handle both old (B, T, C) and new (B, C) output shapes
                 if len(logits.shape) == 3:
@@ -324,9 +350,16 @@ class TrainBlock(PipelineBlock):
                 
                 # Metrics
                 predictions = torch.argmax(logits_flat, dim=-1)
+                batch_correct = (predictions == y_flat).sum().item()
+                batch_samples = y_flat.numel()
+                batch_acc = batch_correct / batch_samples
+                
                 total_loss += loss.item() * X_batch.size(0)
-                total_correct += (predictions == y_flat).sum().item()
-                total_samples += y_flat.numel()
+                total_correct += batch_correct
+                total_samples += batch_samples
+                
+                # Update progress bar
+                pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_acc:.4f}'})
             
             avg_loss = total_loss / len(data_loader.dataset)
             avg_acc = total_correct / total_samples

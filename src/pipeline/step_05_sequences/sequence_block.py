@@ -238,20 +238,43 @@ class SequenceBlock(PipelineBlock):
         
         logger.info(f"    Creating {num_samples:,} windows from {T} timesteps...")
         logger.info(f"    Input: {input_length} steps × {num_coins} coins × {num_channels} channels")
-        logger.info(f"    Output: {output_length} steps × 1 coin ({target_coin} price only)")
+        logger.info(f"    Output: Single prediction {output_length} hours ahead ({target_coin} price only)")
         
         # Pre-allocate arrays
         X = np.zeros((num_samples, input_length, num_coins, num_channels), dtype=np.int64)
-        y = np.zeros((num_samples, output_length), dtype=np.int64)
+        y = np.zeros(num_samples, dtype=np.int64)  # Single prediction per sample
         
         # Create windows using vectorized slicing
         for i in range(num_samples):
             # Input window: all coins, all channels (including target coin)
             X[i] = tokens_array[i:i+input_length, :, :]
             
-            # Output window: target coin price only (channel 0)
-            # No leakage: output hours are AFTER input hours (timesteps i+24 to i+31)
-            y[i] = tokens_array[i+input_length:i+input_length+output_length, target_coin_idx, 0]
+            # Output: SINGLE target coin price at the end of the horizon (e.g., 48 hours ahead)
+            # For output_length=48: predict only the 48th hour ahead (not all 48 hours)
+            # No leakage: output is AFTER input hours (timestep i+input_length+output_length-1)
+            y[i] = tokens_array[i+input_length+output_length-1, target_coin_idx, 0]
+        
+        # Convert 256-bin targets to 3-class labels (negative, level, positive)
+        # Use more balanced thresholds based on actual data distribution
+        num_classes = self.config['model'].get('num_classes', 256)
+        if num_classes == 3:
+            # More balanced thresholds (adjust based on actual token distribution):
+            # Class 0 (negative): tokens 0-99 (bottom ~39%)
+            # Class 1 (level): tokens 100-155 (middle ~22%) 
+            # Class 2 (positive): tokens 156-255 (top ~39%)
+            y_3class = np.zeros_like(y, dtype=np.int64)
+            y_3class[y < 100] = 0      # negative
+            y_3class[(y >= 100) & (y < 156)] = 1  # level
+            y_3class[y >= 156] = 2    # positive
+            y = y_3class
+            
+            # Log class distribution
+            class_counts = np.bincount(y.flatten())
+            total_samples = y.size
+            logger.info(f"    Converted 256-bin targets to 3-class labels:")
+            logger.info(f"      Class 0 (negative): {class_counts[0]:,} samples ({100*class_counts[0]/total_samples:.1f}%)")
+            logger.info(f"      Class 1 (level): {class_counts[1]:,} samples ({100*class_counts[1]/total_samples:.1f}%)")
+            logger.info(f"      Class 2 (positive): {class_counts[2]:,} samples ({100*class_counts[2]/total_samples:.1f}%)")
         
         # Verify no NaNs
         if np.isnan(X).any() or np.isnan(y).any():

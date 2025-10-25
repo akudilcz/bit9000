@@ -1,7 +1,10 @@
 artifacts_base_dir: artifacts
 
-# Data configuration
+# =============================================================================
+# DATA CONFIGURATION
+# =============================================================================
 data:
+  # Cryptocurrency coins to collect data for
   coins:
   - BTC
   - ETH
@@ -13,11 +16,18 @@ data:
   - AVAX
   - DOT
   - LTC
-  target_coin: XRP  # Coin to predict
-  interval: 1h
+  
+  target_coin: BTC  # Coin to predict (BTC is index 0)
+  interval: 1h      # Data interval
+  
+  # Date range for data collection
   default_start_date: 2020-10-01
   default_end_date: 2025-10-01
+  
+  # Data directories
   data_dir: artifacts/step_01_download
+  
+  # Collection settings
   collection:
     batch_limit: 1000
     max_retries: 3
@@ -27,92 +37,122 @@ data:
     min_data_ratio: 0.95
     max_unchanged_threshold: 5
 
-# Split configuration
+# =============================================================================
+# TRAIN/VALIDATION SPLIT CONFIGURATION
+# =============================================================================
 split:
-  train_ratio: 0.8  # 80% train, 20% val
-  temporal: true  # Temporal split (no shuffling)
+  train_ratio: 0.8    # 80% train, 20% validation
+  temporal: true      # Temporal split (no shuffling to prevent data leakage)
 
-# Tokenization configuration - UPDATED to 256 bins
+# =============================================================================
+# TOKENIZATION CONFIGURATION
+# =============================================================================
 tokenization:
-  vocab_size: 256  # 256-bin quantization (0-255)
-  method: quantile  # Use quantile-based binning for uniform distribution
-  percentiles: [0.4, 0.8, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 3.6, 4.0, 4.4, 4.8, 5.2, 5.6, 6.0, 6.4, 6.8, 7.2, 7.6, 8.0, 8.4, 8.8, 9.2, 9.6, 10.0, 10.4, 10.8, 11.2, 11.6, 12.0, 12.4, 12.8, 13.2, 13.6, 14.0, 14.4, 14.8, 15.2, 15.6, 16.0, 16.4, 16.8, 17.2, 17.6, 18.0, 18.4, 18.8, 19.2, 19.6, 20.0, 20.4, 20.8, 21.2, 21.6, 22.0, 22.4, 22.8, 23.2, 23.6, 24.0, 24.4, 24.8, 25.2, 25.6, 26.0, 26.4, 26.8, 27.2, 27.6, 28.0, 28.4, 28.8, 29.2, 29.6, 30.0, 30.4, 30.8, 31.2, 31.6, 32.0, 32.4, 32.8, 33.2, 33.6, 34.0, 34.4, 34.8, 35.2, 35.6, 36.0, 36.4, 36.8, 37.2, 37.6, 38.0, 38.4, 38.8, 39.2, 39.6, 40.0, 40.4, 40.8, 41.2, 41.6, 42.0, 42.4, 42.8, 43.2, 43.6, 44.0, 44.4, 44.8, 45.2, 45.6, 46.0, 46.4, 46.8, 47.2, 47.6, 48.0, 48.4, 48.8, 49.2, 49.6, 50.0, 50.4, 50.8, 51.2, 51.6, 52.0, 52.4, 52.8, 53.2, 53.6, 54.0, 54.4, 54.8, 55.2, 55.6, 56.0, 56.4, 56.8, 57.2, 57.6, 58.0, 58.4, 58.8, 59.2, 59.6, 60.0, 60.4, 60.8, 61.2, 61.6, 62.0, 62.4, 62.8, 63.2, 63.6, 64.0, 64.4, 64.8, 65.2, 65.6, 66.0, 66.4, 66.8, 67.2, 67.6, 68.0, 68.4, 68.8, 69.2, 69.6, 70.0, 70.4, 70.8, 71.2, 71.6, 72.0, 72.4, 72.8, 73.2, 73.6, 74.0, 74.4, 74.8, 75.2, 75.6, 76.0, 76.4, 76.8, 77.2, 77.6, 78.0, 78.4, 78.8, 79.2, 79.6, 80.0, 80.4, 80.8, 81.2, 81.6, 82.0, 82.4, 82.8, 83.2, 83.6, 84.0, 84.4, 84.8, 85.2, 85.6, 86.0, 86.4, 86.8, 87.2, 87.6, 88.0, 88.4, 88.8, 89.2, 89.6, 90.0, 90.4, 90.8, 91.2, 91.6, 92.0, 92.4, 92.8, 93.2, 93.6, 94.0, 94.4, 94.8, 95.2, 95.6, 96.0, 96.4, 96.8, 97.2, 97.6, 98.0, 98.4, 98.8, 99.2, 99.6]  # 255 bin edges for 256 bins
+  vocab_size: 256  # 256-bin quantization for input features (0-255)
+  method: quantile  # Quantile-based binning for uniform distribution
+  
+  # 255 bin edges for 256 bins (percentiles from 0.4 to 99.6)
+  percentiles: [0.4, 0.8, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 3.6, 4.0, 4.4, 4.8, 5.2, 5.6, 6.0, 6.4, 6.8, 7.2, 7.6, 8.0, 8.4, 8.8, 9.2, 9.6, 10.0, 10.4, 10.8, 11.2, 11.6, 12.0, 12.4, 12.8, 13.2, 13.6, 14.0, 14.4, 14.8, 15.2, 15.6, 16.0, 16.4, 16.8, 17.2, 17.6, 18.0, 18.4, 18.8, 19.2, 19.6, 20.0, 20.4, 20.8, 21.2, 21.6, 22.0, 22.4, 22.8, 23.2, 23.6, 24.0, 24.4, 24.8, 25.2, 25.6, 26.0, 26.4, 26.8, 27.2, 27.6, 28.0, 28.4, 28.8, 29.2, 29.6, 30.0, 30.4, 30.8, 31.2, 31.6, 32.0, 32.4, 32.8, 33.2, 33.6, 34.0, 34.4, 34.8, 35.2, 35.6, 36.0, 36.4, 36.8, 37.2, 37.6, 38.0, 38.4, 38.8, 39.2, 39.6, 40.0, 40.4, 40.8, 41.2, 41.6, 42.0, 42.4, 42.8, 43.2, 43.6, 44.0, 44.4, 44.8, 45.2, 45.6, 46.0, 46.4, 46.8, 47.2, 47.6, 48.0, 48.4, 48.8, 49.2, 49.6, 50.0, 50.4, 50.8, 51.2, 51.6, 52.0, 52.4, 52.8, 53.2, 53.6, 54.0, 54.4, 54.8, 55.2, 55.6, 56.0, 56.4, 56.8, 57.2, 57.6, 58.0, 58.4, 58.8, 59.2, 59.6, 60.0, 60.4, 60.8, 61.2, 61.6, 62.0, 62.4, 62.8, 63.2, 63.6, 64.0, 64.4, 64.8, 65.2, 65.6, 66.0, 66.4, 66.8, 67.2, 67.6, 68.0, 68.4, 68.8, 69.2, 69.6, 70.0, 70.4, 70.8, 71.2, 71.6, 72.0, 72.4, 72.8, 73.2, 73.6, 74.0, 74.4, 74.8, 75.2, 75.6, 76.0, 76.4, 76.8, 77.2, 77.6, 78.0, 78.4, 78.8, 79.2, 79.6, 80.0, 80.4, 80.8, 81.2, 81.6, 82.0, 82.4, 82.8, 83.2, 83.6, 84.0, 84.4, 84.8, 85.2, 85.6, 86.0, 86.4, 86.8, 87.2, 87.6, 88.0, 88.4, 88.8, 89.2, 89.6, 90.0, 90.4, 90.8, 91.2, 91.6, 92.0, 92.4, 92.8, 93.2, 93.6, 94.0, 94.4, 94.8, 95.2, 95.6, 96.0, 96.4, 96.8, 97.2, 97.6, 98.0, 98.4, 98.8, 99.2, 99.6]
 
-# Sequence configuration - UPDATED to single-step output
+# =============================================================================
+# SEQUENCE CONFIGURATION
+# =============================================================================
 sequences:
-  input_length: 24  # 24 hours (1 day) of historical context
-  output_length: 1  # Single next-hour prediction (autoregressively generated to 8 hours at inference)
-  num_channels: 2  # 0=price, 1=volume
+  input_length: 48   # 48 hours (2 days) of historical context
+  output_length: 48  # Predict 48 hours (2 days) ahead
+  num_channels: 2    # 0=price, 1=volume
 
-# Model configuration (Simple Token Predictor - Transformer Decoder-Only)
-# UPDATED to 256 vocab and corresponding architecture
+# =============================================================================
+# MODEL ARCHITECTURE - CryptoTransformerV3
+# =============================================================================
 model:
-  type: HighPerformanceTokenPredictor
-  vocab_size: 256  # 256-bin vocabulary for continuous quantization
-  num_classes: 256  # 256-class classification
-  num_coins: 10  # Number of coins (BTC, ETH, BNB, XRP, SOL, DOGE, ADA, AVAX, DOT, LTC)
-  embedding_dim: 256  # Best from tuning: large model performs better on 256-class task
-  d_model: 1024  # Best from tuning: embedding_dim * 4 = 256 * 4
-  num_heads: 8  # Best from tuning: more heads for better attention
-  num_layers: 5  # Best from tuning: deeper model
-  feedforward_dim: 1024  # Best from tuning: larger feedforward
-  dropout: 0.3198300688289384  # Best from tuning
-  stochastic_depth: 0.0  # Disabled for now (caused device issues)
+  type: CryptoTransformerV3  # Encoder-Decoder with multi-task learning
+  
+  # Vocabulary and output configuration
+  vocab_size: 256      # 256-bin vocabulary for input features
+  num_classes: 3       # 3-class output (0=negative, 1=level, 2=positive)
+  num_coins: 10        # Number of coins in dataset
+  target_coin_idx: 0   # BTC is at index 0 (must match data.target_coin)
+  
+  # Transformer architecture (optimized from hyperparameter tuning)
+  d_model: 64                # Model dimension
+  nhead: 2                   # Number of attention heads
+  num_encoder_layers: 2      # Encoder depth
+  num_decoder_layers: 1      # Decoder depth
+  dim_feedforward: 256       # Feedforward dimension
+  dropout: 0.7               # Dropout rate - EXTREME regularization (matches training config)
+  
+  # Embeddings and positional encoding
+  coin_embedding_dim: 32     # Coin-specific embedding dimension
+  positional_encoding: learned  # 'learned' or 'sinusoidal'
+  max_seq_len: 1024          # Max sequence length (48h × 10 coins × 2 channels = 960)
+  
+  # Multi-task learning heads
+  multitask_enabled: true    # Enable multi-task learning
+  enable_regression: true    # Regression head for expected token value
+  enable_quantiles: false    # Quantile prediction heads (disabled)
 
-# Training configuration
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
 training:
   device: cuda
   epochs: 100
-  batch_size: 512  # Best from tuning: larger batches
-  learning_rate: 2.2582412051102675e-05  # Best from tuning
-  weight_decay: 1.0973519173394105e-05  # Best from tuning
-  label_smoothing: 0.009577463910373753  # Best from tuning
-  max_grad_norm: 1.4853855763047719  # Best from tuning
-  gaussian_noise: 0.07787884922761708  # Best from tuning: input Gaussian noise scale for regularization
+  batch_size: 256  # Optimal from tuning
   num_workers: 0
   
-  # LOSS FUNCTION CONFIGURATION
-  # Choose one: 'cross_entropy', 'smooth_ordinal', 'ordinal', 'distance_weighted'
-  loss_type: smooth_ordinal  # RECOMMENDED: smooth ordinal loss rewards nearby predictions
+  # Optimizer settings (adjusted for better convergence)
+  learning_rate: 0.0001        # VERY LOW - reduced from 0.0005
+  weight_decay: 0.05           # VERY HIGH L2 regularization (5x increase)
+  max_grad_norm: 0.1           # VERY TIGHT gradient clipping
   
-  # Smooth Ordinal Loss parameters (used if loss_type: smooth_ordinal)
-  # Sigma controls how "smooth" the target distribution is
-  # Smaller sigma = stricter (only nearby tokens rewarded)
-  # Larger sigma = more lenient (distant tokens get some reward)
-  ordinal_sigma: 5.0  # Distance of ~5 tokens gets ~0.6 probability. Try 3-10.
+  # Regularization (EXTREME to prevent overfitting)
+  dropout: 0.7                 # 70% dropout (very aggressive)
+  label_smoothing: 0.2         # Strong label smoothing
+  gaussian_noise: 0.0          # DISABLED - causing CUDA assertion errors (tokens >= vocab_size)
   
-  # Ordinal Regression Loss parameters (used if loss_type: ordinal)
-  ordinal_margin: 0.5  # Soft margin for ordinal constraints
+  # Learning rate scheduling
+  scheduler: warmup_cosine     # Warmup followed by cosine annealing
+  warmup_epochs: 20            # Extended warmup period (was 8)
+  min_lr_ratio: 0.01           # Minimum LR as fraction of initial LR
   
-  # Distance Weighted Cross Entropy parameters (used if loss_type: distance_weighted)
-  # Alpha controls penalty for distance: loss *= (1 + alpha * distance)
-  # Smaller alpha = less penalty for distance
-  # Larger alpha = more penalty for distance
-  distance_alpha: 0.01  # 10% extra penalty per token distance. Try 0.005-0.05.
-  
+  # Early stopping
   early_stopping:
     enabled: true
-    patience: 40  # INCREASED: from 20 to 40 (allow more epochs without improvement)
-    min_delta: 0.0001
-  warmup:
+    patience: 15               # Stop if no improvement for 15 epochs
+    min_delta: 0.00001           # Minimum improvement threshold
+    monitor: val_accuracy      # Metric to monitor
+  
+  # Loss function configuration
+  loss_type: cross_entropy     # Loss type: 'cross_entropy', 'smooth_ordinal', 'ordinal', 'distance_weighted'
+  use_class_weights: true      # Enable automatic class weighting for imbalanced data
+  
+  # Alternative loss function parameters (used if loss_type is changed)
+  ordinal_sigma: 5.0           # For smooth_ordinal: Gaussian smoothing sigma
+  ordinal_margin: 0.5          # For ordinal: Soft margin for constraints
+  distance_alpha: 0.05         # For distance_weighted: Penalty per token distance
+  
+  # Multi-task learning weights (V3 only)
+  multitask:
     enabled: true
-    epochs: 2  # Best from tuning: reduced warmup
-    start_lr: 0.0000001  # 1e-7
-  scheduler:
-    enabled: true
-    type: ReduceLROnPlateau
-    factor: 0.5
-    patience: 10
-    min_lr: 0.000001  # 1e-6 - minimum learning rate
-  log_interval: 10
-  save_interval: 10
+    w_cls: 1.0                 # Weight for classification loss
+    w_huber: 0.3               # Weight for regression (Huber) loss
+    w_quantile: 0.0            # Weight for quantile loss (disabled)
+  
+  # Logging
+  log_interval: 10             # Log every N batches
+  save_interval: 10            # Save checkpoint every N epochs
 
-# Inference configuration
+# =============================================================================
+# INFERENCE CONFIGURATION
+# =============================================================================
 inference:
-  num_steps: 8  # Generate 8 steps autoregressively
-  sampling: argmax  # or 'sample' for stochastic generation
+  num_steps: 8                 # Number of autoregressive prediction steps
+  sampling: argmax             # Sampling strategy: 'argmax' or 'sample'
 
-# Logging configuration
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
 logging:
   level: INFO
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

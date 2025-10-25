@@ -1,8 +1,8 @@
-"""Tests for SimpleTokenPredictor model architecture"""
+"""Tests for CryptoTransformerV1 model architecture"""
 
 import pytest
 import torch
-from src.model.token_predictor import SimpleTokenPredictor
+from src.model.v1_transformer import CryptoTransformerV1
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def config():
 
 def test_model_accepts_correct_input_shape(config):
     """Test that model accepts input shape (batch, 24, num_coins, 2)"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     batch_size = 16
     input_length = config['sequences']['input_length']
@@ -51,7 +51,7 @@ def test_model_accepts_correct_input_shape(config):
 
 def test_model_output_shape(config):
     """Test that model output shape is (batch, 8, 3) for 8-step predictions with teacher forcing"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     batch_size = 16
     input_length = config['sequences']['input_length']
@@ -74,7 +74,7 @@ def test_model_output_shape(config):
 
 def test_model_handles_different_batch_sizes(config):
     """Test that model works with different batch sizes"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     input_length = config['sequences']['input_length']
     num_coins = len(config['data']['coins'])
@@ -88,7 +88,7 @@ def test_model_handles_different_batch_sizes(config):
 
 def test_model_outputs_valid_logits(config):
     """Test that model outputs are valid logits (not probabilities)"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     batch_size = 16
     input_length = config['sequences']['input_length']
@@ -106,7 +106,7 @@ def test_model_outputs_valid_logits(config):
 
 def test_model_parameters_count_reasonable(config):
     """Test that model has reasonable number of parameters (< 10M)"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     total_params = sum(p.numel() for p in model.parameters())
     
@@ -121,7 +121,7 @@ def test_model_parameters_count_reasonable(config):
 
 def test_model_embedding_dimensions(config):
     """Test that model has separate embeddings for price and volume"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     # Model should have token embeddings
     # Check if model has expected components
@@ -131,7 +131,7 @@ def test_model_embedding_dimensions(config):
 
 def test_model_eval_mode(config):
     """Test that model can be set to eval mode"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     # Set to eval mode
     model.eval()
@@ -151,7 +151,7 @@ def test_model_eval_mode(config):
 
 def test_model_training_mode(config):
     """Test that model can be trained with teacher forcing"""
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     model.train()
     
     batch_size = 16

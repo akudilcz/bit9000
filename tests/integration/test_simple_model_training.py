@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.model.token_predictor import SimpleTokenPredictor
+from src.model.v1_transformer import CryptoTransformerV1
 
 
 def test_early_stopping():
@@ -19,7 +19,7 @@ def test_early_stopping():
 
 
 def test_token_predictor_initialization():
-    """Test SimpleTokenPredictor model creation"""
+    """Test CryptoTransformerV1 model creation"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -39,7 +39,7 @@ def test_token_predictor_initialization():
         }
     }
     
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     # Test model was created
     assert model is not None
@@ -51,7 +51,7 @@ def test_token_predictor_initialization():
 
 
 def test_token_predictor_forward_pass():
-    """Test SimpleTokenPredictor forward pass"""
+    """Test CryptoTransformerV1 forward pass"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -71,7 +71,7 @@ def test_token_predictor_forward_pass():
         }
     }
     
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     # Test forward pass with training mode (teacher forcing)
     batch_size = 4
@@ -93,7 +93,7 @@ def test_token_predictor_forward_pass():
 
 
 def test_token_predictor_inference():
-    """Test SimpleTokenPredictor inference mode"""
+    """Test CryptoTransformerV1 inference mode"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -113,7 +113,7 @@ def test_token_predictor_inference():
         }
     }
     
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     model.eval()
     
     # Test inference mode (no targets)
@@ -132,7 +132,7 @@ def test_token_predictor_inference():
 
 
 def test_token_predictor_generate():
-    """Test SimpleTokenPredictor autoregressive generation"""
+    """Test CryptoTransformerV1 autoregressive generation"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -152,7 +152,7 @@ def test_token_predictor_generate():
         }
     }
     
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     # Test autoregressive generation
     batch_size = 2
@@ -193,7 +193,7 @@ def test_token_predictor_dimensions():
         }
     }
     
-    model = SimpleTokenPredictor(config)
+    model = CryptoTransformerV1(config)
     
     # Verify dimensions
     assert model.embedding_dim == 64
@@ -230,5 +230,5 @@ def test_token_predictor_invalid_dimensions():
     
     # Should raise ValueError because d_model is not divisible by num_heads
     with pytest.raises(ValueError, match="d_model.*must be divisible by nhead"):
-        model = SimpleTokenPredictor(config)
+        model = CryptoTransformerV1(config)
 

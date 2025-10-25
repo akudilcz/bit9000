@@ -130,32 +130,31 @@ class OrdinalRegressionLoss(nn.Module):
         Returns:
             Scalar loss
         """
-        # Convert logits to probabilities for cumulative distribution
-        probs = torch.sigmoid(logits)  # (batch, num_classes)
-        
-        # Cumulative probabilities: P(y <= k)
-        cumprobs = torch.cumsum(probs, dim=1)  # (batch, num_classes)
-        
-        # Ordinal loss: penalize based on distance
-        # If true class is k, we want:
-        # - P(y <= j) high for j >= k (classes at or after target)
-        # - P(y <= j) low for j < k (classes before target)
-        
         batch_size = targets.size(0)
-        loss = 0.0
+        device = logits.device
+        
+        # Convert logits to probabilities using log_sigmoid for numerical stability
+        log_probs = torch.nn.functional.logsigmoid(logits)  # log(sigmoid(x))
+        
+        # Loss accumulation
+        loss = torch.zeros(batch_size, device=device)
         
         for i in range(batch_size):
             true_class = targets[i].item()
             
-            # Penalize if j < true_class and P(y <= j) is too high
+            # For classes before true_class: want P(y <= j) to be low
+            # Minimize log(sigmoid(logit)) or maximize -log(sigmoid(logit))
             if true_class > 0:
-                loss += torch.sum(torch.clamp(cumprobs[i, :true_class], min=self.margin) - self.margin)
+                # These should be low probabilities, so penalize positive logits
+                loss[i] += torch.sum(torch.clamp(logits[i, :true_class], min=-10.0))
             
-            # Penalize if j >= true_class and P(y <= j) is too low
+            # For classes at or after true_class: want P(y <= j) to be high
+            # Minimize -log(sigmoid(logit)) or maximize log(sigmoid(logit))
             if true_class < self.num_classes - 1:
-                loss += torch.sum(torch.clamp(1.0 - cumprobs[i, true_class:], min=self.margin) - self.margin)
+                # These should be high probabilities, so penalize negative logits
+                loss[i] += torch.sum(torch.clamp(-logits[i, true_class:], min=-10.0))
         
-        return loss / batch_size
+        return loss.mean()
 
 
 class SmoothOrdinalLoss(nn.Module):
@@ -203,7 +202,8 @@ class SmoothOrdinalLoss(nn.Module):
             true_class = targets[i].item()
             # Gaussian centered at true_class
             distances = torch.arange(self.num_classes, device=device, dtype=torch.float32) - true_class
-            soft_targets[i] = torch.exp(-distances.pow(2) / (2 * self.sigma ** 2))
+            # Square the distance for stronger penalization of distant predictions
+            soft_targets[i] = torch.exp(-distances.pow(4) / (2 * self.sigma ** 2))
             # Normalize
             soft_targets[i] = soft_targets[i] / soft_targets[i].sum()
         
@@ -317,11 +317,27 @@ class CryptoLightningModule(LightningModule):
     def _shared_step(self, batch, stage: str):
         sequences, targets = batch  # sequences: (batch, seq_len, features), targets: (batch, seq_len, 1) or (batch, seq_len)
         
-        # No augmentation for MVP - keep it simple
-        # sequences, targets = self.augmentor.augment_batch(sequences, targets, stage=stage)
+        # Apply Gaussian noise augmentation during training only
+        if stage == 'train' and self.training:
+            noise_std = self.training_config.get('gaussian_noise', 0.0)
+            if noise_std > 0:
+                vocab_size = self.config['model']['vocab_size']
+                
+                # Add Gaussian noise to input sequences (already integers)
+                # Convert to float, add noise, then round and clip
+                sequences_float = sequences.float()
+                noise = torch.randn_like(sequences_float) * noise_std
+                sequences_noisy = sequences_float + noise
+                
+                # Round to nearest integer and clip to valid token range [0, vocab_size-1]
+                sequences = torch.clamp(torch.round(sequences_noisy), 0, vocab_size - 1).long()
+                
+                # Double-check: ensure all values are in valid range
+                assert sequences.min() >= 0 and sequences.max() < vocab_size, \
+                    f"Noise produced invalid tokens: min={sequences.min()}, max={sequences.max()}, vocab_size={vocab_size}"
         
         # Forward pass
-        outputs = self(sequences)  # Shape: (batch, num_coins, num_classes)
+        outputs = self(sequences)  # V1/V2: (batch, num_coins, num_classes) or V3: dict
         
         # Targets are hard labels (no soft labels for MVP)
         # Handle different target shapes
@@ -334,40 +350,96 @@ class CryptoLightningModule(LightningModule):
             target_labels = targets
             is_one_hot = False
         
-        # Get number of target coins from config
-        num_target_coins = self.config['model'].get('num_target_coins', self.config['model']['num_coins'])
+        # Check if V3 model (dict outputs) or V1/V2 (tensor outputs)
+        is_v3 = isinstance(outputs, dict)
         
-        # For single target coin, use first coin's output
-        if num_target_coins == 1:
-            # outputs: (batch, 1, num_classes), target_labels: (batch,)
-            logits = outputs[:, 0, :]  # (batch, num_classes)
+        if is_v3:
+            # CryptoTransformerV3: dict with 'logits', 'regression', 'quantiles'
+            logits = outputs['logits']  # (batch, num_classes)
             
-            # Target is hard labels (no soft labels for MVP)
-            loss = self.criterion(logits, target_labels.long())
+            # Multi-task loss
+            loss_cls = self.criterion(logits, target_labels.long())
+            loss = loss_cls
+            
+            # Auxiliary losses (if enabled)
+            multitask_cfg = self.training_config.get('multitask', {})
+            if multitask_cfg.get('enabled', False):
+                # Regression loss: predict expected token index
+                if 'regression' in outputs:
+                    # Compute expected token from target
+                    expected_token = target_labels.float()  # (batch,)
+                    regression_pred = outputs['regression'].squeeze(-1)  # (batch,)
+                    
+                    # Huber loss (robust to outliers)
+                    loss_reg = nn.functional.huber_loss(regression_pred, expected_token, reduction='mean')
+                    w_reg = multitask_cfg.get('w_huber', 0.3)
+                    loss = loss + w_reg * loss_reg
+                    self.log(f'{stage}_loss_reg', loss_reg, prog_bar=False)
+                
+                # Quantile loss
+                if 'quantiles' in outputs:
+                    quantiles = outputs['quantiles']  # (batch, 3)
+                    expected_token = target_labels.float().unsqueeze(-1)  # (batch, 1)
+                    
+                    # Quantile loss for τ = [0.1, 0.5, 0.9]
+                    taus = torch.tensor([0.1, 0.5, 0.9], device=quantiles.device).unsqueeze(0)  # (1, 3)
+                    errors = expected_token - quantiles  # (batch, 3)
+                    loss_q = torch.mean(torch.maximum(taus * errors, (taus - 1) * errors))
+                    
+                    w_q = multitask_cfg.get('w_quantile', 0.0)
+                    if w_q > 0:
+                        loss = loss + w_q * loss_q
+                        self.log(f'{stage}_loss_quantile', loss_q, prog_bar=False)
+                
+                self.log(f'{stage}_loss_cls', loss_cls, prog_bar=False)
+            
             preds = torch.argmax(logits, dim=1)
             acc_value = (preds == target_labels).float().mean()
             
-            # Calculate per-class accuracies
-            for class_idx in range(self.num_classes):
-                mask = target_labels == class_idx
-                if mask.sum() > 0:
-                    class_acc = (preds[mask] == target_labels[mask]).float().mean()
-                    self.log(f'{stage}_acc_class_{class_idx}', class_acc, prog_bar=False)
+            # Soft accuracy (within ±1 token)
+            soft_acc = ((preds - target_labels).abs() <= 1).float().mean()
+            self.log(f'{stage}_soft_acc', soft_acc, prog_bar=False)
             
-            # Calculate actionable accuracy (down and up only, for 3-class system)
-            if self.num_classes == 3:
-                actionable_mask = target_labels != 1  # Exclude steady class
-                if actionable_mask.sum() > 0:
-                    actionable_acc = (preds[actionable_mask] == target_labels[actionable_mask]).float().mean()
-                    self.log(f'{stage}_acc_actionable', actionable_acc, prog_bar=True)
+            # MAE on token indices
+            mae = (preds - target_labels).abs().float().mean()
+            self.log(f'{stage}_mae', mae, prog_bar=False)
+            
         else:
-            # For multiple target coins (future): flatten and expand targets
-            logits = outputs.view(-1, self.num_classes)  # (batch*num_coins, num_classes)
-            targets_expanded = target_labels.unsqueeze(1).expand(-1, num_target_coins).reshape(-1)
-            loss = self.criterion(logits, targets_expanded.long())
+            # V1/V2: Original logic
+            # Get number of target coins from config
+            num_target_coins = self.config['model'].get('num_target_coins', self.config['model']['num_coins'])
             
-            preds = torch.argmax(logits, dim=1)
-            acc_value = (preds == targets_expanded).float().mean()
+            # For single target coin, use first coin's output
+            if num_target_coins == 1:
+                # outputs: (batch, 1, num_classes), target_labels: (batch,)
+                logits = outputs[:, 0, :]  # (batch, num_classes)
+                
+                # Target is hard labels (no soft labels for MVP)
+                loss = self.criterion(logits, target_labels.long())
+                preds = torch.argmax(logits, dim=1)
+                acc_value = (preds == target_labels).float().mean()
+                
+                # Calculate per-class accuracies
+                for class_idx in range(self.num_classes):
+                    mask = target_labels == class_idx
+                    if mask.sum() > 0:
+                        class_acc = (preds[mask] == target_labels[mask]).float().mean()
+                        self.log(f'{stage}_acc_class_{class_idx}', class_acc, prog_bar=False)
+                
+                # Calculate actionable accuracy (down and up only, for 3-class system)
+                if self.num_classes == 3:
+                    actionable_mask = target_labels != 1  # Exclude steady class
+                    if actionable_mask.sum() > 0:
+                        actionable_acc = (preds[actionable_mask] == target_labels[actionable_mask]).float().mean()
+                        self.log(f'{stage}_acc_actionable', actionable_acc, prog_bar=True)
+            else:
+                # For multiple target coins (future): flatten and expand targets
+                logits = outputs.view(-1, self.num_classes)  # (batch*num_coins, num_classes)
+                targets_expanded = target_labels.unsqueeze(1).expand(-1, num_target_coins).reshape(-1)
+                loss = self.criterion(logits, targets_expanded.long())
+                
+                preds = torch.argmax(logits, dim=1)
+                acc_value = (preds == targets_expanded).float().mean()
         
         self.log(f'{stage}_loss', loss, prog_bar=True)
         self.log(f'{stage}_acc', acc_value, prog_bar=True)

@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from src.model import create_model
 from src.utils.logger import get_logger
+from src.model.trainer import SmoothOrdinalLoss
 
 logger = get_logger(__name__)
 
@@ -96,32 +97,28 @@ class HyperparameterTuner:
         Returns:
             Dictionary of sampled hyperparameters
         """
-        # Training hyperparameters
-        learning_rate = trial.suggest_float("learning_rate", 5e-6, 5e-3, log=True)
-        weight_decay = trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True)
-        dropout = trial.suggest_float("dropout", 0.0, 0.5)
-        label_smoothing = trial.suggest_float("label_smoothing", 0.001, 0.08)
-        max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 2.0)
-        gaussian_noise = trial.suggest_float("gaussian_noise", 0.0, 0.15)  # NEW: input noise scale
-        batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
+        # Training hyperparameters - optimized for 3-class problem
+        learning_rate = trial.suggest_float("learning_rate", 1e-4, 2e-3, log=True)  # Smaller range for 3-class
+        weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
+        dropout = trial.suggest_float("dropout", 0.1, 0.4)  # Higher dropout for regularization
+        label_smoothing = trial.suggest_float("label_smoothing", 0.01, 0.1)  # Reduced for 3-class
+        max_grad_norm = trial.suggest_float("max_grad_norm", 0.5, 1.5)  # Tighter clipping
+        gaussian_noise = trial.suggest_float("gaussian_noise", 0.0, 0.1)  # Reduced noise
+        batch_size = trial.suggest_categorical("batch_size", [128, 256, 512])  # Larger batches for stability
 
-        # Architecture hyperparameters - EXPANDED to include MUCH smaller models
-        embedding_dim = trial.suggest_categorical("embedding_dim", [8, 16, 32, 64, 128, 256])  # EXPANDED: added 8 (tiny)
-        num_layers = trial.suggest_int("num_layers", 1, 6)  # EXPANDED: down to 1 layer (ultra-compact)
-        num_heads = trial.suggest_categorical("num_heads", [1, 2, 4, 8])  # EXPANDED: added 1 (single head)
-        feedforward_dim = trial.suggest_categorical(
-            "feedforward_dim", [64, 128, 256, 512, 1024]  # EXPANDED: down to 64 (very small)
-        )
-
-        # Model dimension = embedding_dim * 4 (after channel fusion of price + volume)
-        d_model = embedding_dim * 4  # 2 channels * 2x scaling
+        # Architecture hyperparameters - optimized for 3-class problem
+        d_model = trial.suggest_categorical("d_model", [64, 128, 256])  # Direct d_model selection
+        num_encoder_layers = trial.suggest_int("num_encoder_layers", 1, 3)  # Fewer layers
+        num_decoder_layers = trial.suggest_int("num_decoder_layers", 1, 3)  # Fewer layers
+        num_heads = trial.suggest_categorical("num_heads", [2, 4, 8])  # Reasonable head counts
+        feedforward_dim = trial.suggest_categorical("feedforward_dim", [128, 256, 512])  # Smaller FF
 
         # Ensure d_model is divisible by num_heads
         while d_model % num_heads != 0:
             d_model += 1
 
-        # Warmup epochs
-        warmup_epochs = trial.suggest_int("warmup_epochs", 1, 5)  # EXPANDED: down to 1 epoch
+        # Warmup epochs - shorter for 3-class problem
+        warmup_epochs = trial.suggest_int("warmup_epochs", 3, 10)
 
         return {
             "learning_rate": learning_rate,
@@ -130,9 +127,9 @@ class HyperparameterTuner:
             "label_smoothing": label_smoothing,
             "max_grad_norm": max_grad_norm,
             "batch_size": batch_size,
-            "embedding_dim": embedding_dim,
             "d_model": d_model,
-            "num_layers": num_layers,
+            "num_encoder_layers": num_encoder_layers,
+            "num_decoder_layers": num_decoder_layers,
             "num_heads": num_heads,
             "feedforward_dim": feedforward_dim,
             "warmup_epochs": warmup_epochs,
@@ -156,17 +153,19 @@ class HyperparameterTuner:
         try:
             # Create a copy of config and update with trial hyperparameters
             trial_config = copy.deepcopy(self.config)
-            trial_config['model']['embedding_dim'] = params['embedding_dim']
             trial_config['model']['d_model'] = params['d_model']
-            trial_config['model']['num_heads'] = params['num_heads']
-            trial_config['model']['num_layers'] = params['num_layers']
-            trial_config['model']['feedforward_dim'] = params['feedforward_dim']
+            trial_config['model']['nhead'] = params['num_heads']
+            trial_config['model']['num_encoder_layers'] = params['num_encoder_layers']
+            trial_config['model']['num_decoder_layers'] = params['num_decoder_layers']
+            trial_config['model']['dim_feedforward'] = params['feedforward_dim']
             trial_config['model']['dropout'] = params['dropout']
             trial_config['training']['learning_rate'] = params['learning_rate']
             trial_config['training']['weight_decay'] = params['weight_decay']
             trial_config['training']['label_smoothing'] = params['label_smoothing']
             trial_config['training']['max_grad_norm'] = params['max_grad_norm']
             trial_config['training']['gaussian_noise'] = params['gaussian_noise']
+            trial_config['training']['batch_size'] = params['batch_size']
+            trial_config['training']['warmup_epochs'] = params['warmup_epochs']
 
             # Create model with sampled hyperparameters
             model = create_model(trial_config).to(self.device)
@@ -197,11 +196,19 @@ class HyperparameterTuner:
                 weight_decay=params["weight_decay"],
             )
 
-            # Loss function with label smoothing
-            criterion = nn.CrossEntropyLoss(label_smoothing=params["label_smoothing"])
+            # Loss function - use config loss_type and num_classes
+            loss_type = trial_config['training'].get('loss_type', 'cross_entropy')
+            num_classes = trial_config['model'].get('num_classes', 3)
+            
+            if loss_type == 'smooth_ordinal':
+                sigma = trial_config['training'].get('ordinal_sigma', 5.0)
+                criterion = SmoothOrdinalLoss(num_classes=num_classes, sigma=sigma)
+            else:
+                # Use cross entropy with correct number of classes
+                criterion = nn.CrossEntropyLoss(label_smoothing=params["label_smoothing"])
 
             # Simple training loop (no full trainer for speed)
-            best_val_accuracy = 0.0
+            best_val_loss = float('inf')  # Initialize to infinity for loss minimization
             epochs_without_improvement = 0
             early_stopping_patience = 10
             min_delta = 0.000001
@@ -220,8 +227,9 @@ class HyperparameterTuner:
 
                     optimizer.zero_grad()
                     
-                    # Forward pass: model now outputs (batch, vocab_size) for single next-hour token
-                    logits = model(X_batch, targets=y_batch)  # (batch, 256)
+                    # Forward pass: model outputs dict with logits for 3-class prediction
+                    outputs = model(X_batch)  # Returns dict with 'logits' key
+                    logits = outputs['logits']  # (batch, 3)
 
                     # Compute loss
                     loss = criterion(logits, y_batch)
@@ -251,7 +259,8 @@ class HyperparameterTuner:
                         if len(y_batch.shape) > 1:
                             y_batch = y_batch.squeeze(-1)
 
-                        logits = model(X_batch, targets=y_batch)  # (batch, 256)
+                        outputs = model(X_batch)  # Returns dict with 'logits' key
+                        logits = outputs['logits']  # (batch, 3)
                         
                         # Compute accuracy (label smoothing doesn't affect this)
                         preds = torch.argmax(logits, dim=1)
@@ -265,15 +274,15 @@ class HyperparameterTuner:
                 val_accuracy /= len(val_loader)
                 val_loss /= len(val_loader)
 
-                # Track best val accuracy (NOT loss)
-                if val_accuracy > best_val_accuracy + min_delta:
-                    best_val_accuracy = val_accuracy
+                # Track best val loss (for early stopping)
+                if val_loss < best_val_loss - min_delta:  # Reuse variable for best metric
+                    best_val_loss = val_loss
                     epochs_without_improvement = 0  # Reset counter
                 else:
                     epochs_without_improvement += 1
 
-                # Report intermediate value for pruning (use negative accuracy to minimize)
-                trial.report(-val_accuracy, epoch)
+                # Report validation loss for pruning and optimization (minimize loss)
+                trial.report(val_loss, epoch)
 
                 # Check if trial should be pruned
                 if trial.should_prune():
@@ -297,10 +306,10 @@ class HyperparameterTuner:
                     break
 
             logger.info(
-                f"Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.8f}"
+                f"Trial {trial.number} completed with best_val_loss={best_val_loss:.8f}"
             )
-            print(f"[DONE] Trial {trial.number} completed with best_val_accuracy={best_val_accuracy:.8f}")
-            return -best_val_accuracy  # Return negative accuracy (Optuna minimizes)
+            print(f"[DONE] Trial {trial.number} completed with best_val_loss={best_val_loss:.8f}")
+            return best_val_loss  # Return validation loss (Optuna minimizes)
 
         except Exception as e:
             logger.error(f"Trial {trial.number} failed with error: {e}")

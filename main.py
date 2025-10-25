@@ -221,7 +221,7 @@ def tune(num_trials, epochs_per_trial, timeout_hours):
     click.echo("TUNING COMPLETE!")
     click.echo("="*70)
     click.echo(f"Best trial: {results['best_trial']}")
-    click.echo(f"Best validation loss: {results['best_val_loss']:.6f}")
+    click.echo(f"Best validation loss: {results['best_val_loss']:.4f}")
     click.echo(f"Completed trials: {results['num_completed_trials']}/{results['num_trials']}")
     click.echo(f"Pruned trials: {results['num_pruned_trials']}")
     click.echo(f"\nBest parameters:")
