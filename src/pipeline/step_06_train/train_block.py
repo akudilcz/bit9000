@@ -122,8 +122,11 @@ class TrainBlock(PipelineBlock):
         binary_classification = self.config['model'].get('binary_classification', False)
         if binary_classification:
             pos_weight = self.config['training'].get('pos_weight', 5.7)
-            criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
-            logger.info(f"  Using binary classification with pos_weight={pos_weight}")
+            # For binary classification with 2-class output, use weighted CrossEntropyLoss
+            # Create class weights: [1.0, pos_weight] to upweight class 1 (BUY)
+            class_weights = torch.tensor([1.0, pos_weight], device=device)
+            criterion = nn.CrossEntropyLoss(weight=class_weights)
+            logger.info(f"  Using binary classification with class weights=[1.0, {pos_weight}]")
         else:
             logger.info(f"  Using multi-class classification ({self.config['model'].get('num_classes', 256)} classes)")
         
@@ -260,8 +263,9 @@ class TrainBlock(PipelineBlock):
         total_correct = 0
         total_samples = 0
         
-        # Check if model is multi-horizon (V4)
+        # Check if model is multi-horizon (V4) and binary classification
         is_multi_horizon = hasattr(model, 'horizon_heads')
+        binary_classification = self.config['model'].get('binary_classification', False)
         
         # Create progress bar
         pbar = tqdm(data_loader, desc='Training', leave=False, ncols=100)
@@ -303,10 +307,10 @@ class TrainBlock(PipelineBlock):
                     
                     # Compute loss for this horizon with weight
                     if binary_classification:
-                        # Binary loss: BCEWithLogitsLoss expects (B, 1) logits and (B,) targets as float
-                        y_float = y_horizon.float()
-                        horizon_loss = criterion(logits.squeeze(-1), y_float) * horizon_weights[idx]
-                        predictions = (torch.sigmoid(logits.squeeze(-1)) > 0.5).long()
+                        # Binary classification with 2 classes: use CrossEntropyLoss
+                        # logits shape: (B, 2), y_horizon shape: (B,)
+                        horizon_loss = criterion(logits, y_horizon.long()) * horizon_weights[idx]
+                        predictions = torch.argmax(logits, dim=-1)
                     else:
                         horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
                         predictions = torch.argmax(logits, dim=-1)
@@ -380,8 +384,9 @@ class TrainBlock(PipelineBlock):
         total_correct = 0
         total_samples = 0
         
-        # Check if model is multi-horizon (V4)
+        # Check if model is multi-horizon (V4) and binary classification
         is_multi_horizon = hasattr(model, 'horizon_heads')
+        binary_classification = self.config['model'].get('binary_classification', False)
         
         # Create progress bar
         pbar = tqdm(data_loader, desc='Validation', leave=False, ncols=100)
@@ -407,10 +412,9 @@ class TrainBlock(PipelineBlock):
                         y_horizon = y_batch[:, idx]
                         
                         if binary_classification:
-                            # Binary loss
-                            y_float = y_horizon.float()
-                            horizon_loss = criterion(logits.squeeze(-1), y_float) * horizon_weights[idx]
-                            predictions = (torch.sigmoid(logits.squeeze(-1)) > 0.5).long()
+                            # Binary classification with 2 classes
+                            horizon_loss = criterion(logits, y_horizon.long()) * horizon_weights[idx]
+                            predictions = torch.argmax(logits, dim=-1)
                         else:
                             horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
                             predictions = torch.argmax(logits, dim=-1)
