@@ -27,13 +27,13 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class LearnedPositionalEncoding(nn.Module):
-    """Learned positional embeddings for temporal sequences"""
+class SinusoidalPositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding (does not learn, more generalizable)"""
     
-    def __init__(self, d_model: int, max_len: int = 512, dropout: float = 0.1):
+    def __init__(self, d_model: int, dropout: float = 0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
-        self.pe = nn.Embedding(max_len, d_model)
+        self.d_model = d_model
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -43,8 +43,20 @@ class LearnedPositionalEncoding(nn.Module):
             x with positional encoding added
         """
         B, L, D = x.shape
-        positions = torch.arange(L, device=x.device).unsqueeze(0).expand(B, -1)
-        x = x + self.pe(positions)
+        
+        # Sinusoidal positional encoding
+        position = torch.arange(L, dtype=torch.float, device=x.device).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, D, 2, dtype=torch.float, device=x.device) * 
+                             -(math.log(10000.0) / D))
+        
+        pe = torch.zeros(L, D, device=x.device)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if D % 2 == 1:
+            pe[:, 1::2] = torch.cos(position * div_term[:-1])
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        
+        x = x + pe.unsqueeze(0)
         return self.dropout(x)
 
 
@@ -142,7 +154,7 @@ class CryptoTransformerV4(nn.Module):
         
         # Time-based feature encoding
         self.time_encoding = CyclicalTimeEncoding(d_model)
-        self.position_encoding = LearnedPositionalEncoding(d_model, max_seq_len, dropout)
+        self.position_encoding = SinusoidalPositionalEncoding(d_model, dropout)
         
         # Shared encoder: process all coins
         encoder_layer = nn.TransformerEncoderLayer(

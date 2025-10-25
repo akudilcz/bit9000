@@ -268,7 +268,9 @@ class TrainBlock(PipelineBlock):
             
             # Handle multi-horizon (V4) vs single horizon (V1/V2/V3)
             if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
-                # Multi-horizon V4: combine losses from all horizons
+                # Multi-horizon V4: weight by horizon difficulty
+                # Shorter horizons are typically harder to predict
+                horizon_weights = [1.0, 0.8, 0.6, 0.4]  # 1h: hardest, 8h: easiest
                 loss = 0
                 all_correct = 0
                 all_samples = 0
@@ -278,8 +280,8 @@ class TrainBlock(PipelineBlock):
                     logits = outputs[horizon]['logits']  # (B, num_classes)
                     y_horizon = y_batch[:, idx]  # (B,)
                     
-                    # Compute loss for this horizon
-                    horizon_loss = criterion(logits, y_horizon)
+                    # Compute loss for this horizon with weight
+                    horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
                     loss += horizon_loss
                     
                     # Metrics
@@ -287,8 +289,8 @@ class TrainBlock(PipelineBlock):
                     all_correct += (predictions == y_horizon).sum().item()
                     all_samples += y_horizon.numel()
                 
-                # Average loss across horizons
-                loss = loss / 4.0
+                # Normalize by sum of weights (not 4.0)
+                loss = loss / sum(horizon_weights)
                 batch_acc = all_correct / all_samples
                 
             elif isinstance(outputs, dict):
@@ -365,7 +367,8 @@ class TrainBlock(PipelineBlock):
                 
                 # Handle multi-horizon (V4) vs single horizon (V1/V2/V3)
                 if is_multi_horizon and isinstance(outputs, dict) and 'horizon_1h' in outputs:
-                    # Multi-horizon V4
+                    # Multi-horizon V4: weight by horizon difficulty
+                    horizon_weights = [1.0, 0.8, 0.6, 0.4]  # 1h: hardest, 8h: easiest
                     loss = 0
                     all_correct = 0
                     all_samples = 0
@@ -375,14 +378,14 @@ class TrainBlock(PipelineBlock):
                         logits = outputs[horizon]['logits']
                         y_horizon = y_batch[:, idx]
                         
-                        horizon_loss = criterion(logits, y_horizon)
+                        horizon_loss = criterion(logits, y_horizon) * horizon_weights[idx]
                         loss += horizon_loss
                         
                         predictions = torch.argmax(logits, dim=-1)
                         all_correct += (predictions == y_horizon).sum().item()
                         all_samples += y_horizon.numel()
                     
-                    loss = loss / 4.0
+                    loss = loss / sum(horizon_weights)
                     batch_acc = all_correct / all_samples
                     total_correct += all_correct
                     total_samples += all_samples

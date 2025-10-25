@@ -70,12 +70,12 @@ model:
   btc_coin_idx: 0      # BTC is at index 0 for dedicated pathway
   
   # Transformer architecture (increased for better multi-horizon learning)
-  d_model: 256                # Model dimension for richer representations
-  nhead: 8                    # Number of attention heads
+  d_model: 208                # Reduced from 256 for better regularization on 4-coin dataset
+  nhead: 4                    # Reduced from 8 to 4 heads (fewer parameters, less overfitting)
   num_encoder_layers: 3       # Shared encoder depth
   num_decoder_layers: 3       # XRP decoder depth
-  dim_feedforward: 1024       # Feedforward dimension
-  dropout: 0.3                # Dropout rate
+  dim_feedforward: 768        # Reduced from 1024
+  dropout: 0.4                # Increased from 0.3 for better regularization
   
   # Embeddings and positional encoding
   coin_embedding_dim: 32     # Coin-specific embedding dimension
@@ -98,13 +98,13 @@ training:
   
   # Optimizer settings (optimized for 45% target)
   learning_rate: 0.0003        # Moderate learning rate for good convergence
-  weight_decay: 0.015          # Balanced L2 regularization
-  max_grad_norm: 1.0           # Standard gradient clipping
+  weight_decay: 0.03           # Increased from 0.015 - stronger L2 regularization
+  max_grad_norm: 0.5           # Tighter gradient clipping to prevent instability
   
   # Regularization (balanced for performance)
-  dropout: 0.3                 # Dropout rate (matches model config)
+  dropout: 0.4                 # Increased from 0.3 (matches model config)
   label_smoothing: 0.08        # Moderate smoothing for better generalization
-  gaussian_noise: 0.015        # Light noise augmentation for robustness
+  gaussian_noise: 0.025        # Increased from 0.015 for noise robustness
   
   # Learning rate scheduling
   scheduler: warmup_cosine     # Warmup followed by cosine annealing
