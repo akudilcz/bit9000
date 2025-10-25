@@ -118,8 +118,11 @@ class CryptoTransformerV3(nn.Module):
         self.price_embedding = nn.Embedding(vocab_size, d_model // 4)
         self.volume_embedding = nn.Embedding(vocab_size, d_model // 4)
         
-        # Channel fusion: combine price + volume + coin embedding
-        fusion_dim = (d_model // 4) * 2 + coin_embedding_dim
+        # Channel fusion: combine price + volume + [optional indicator_avg] + coin embedding
+        # For 2 channels: price + volume + coin = (d_model//4)*2 + coin_emb_dim
+        # For 5 channels: price + volume + indicator_avg + coin = (d_model//4)*3 + coin_emb_dim
+        # We'll use the larger dimension to handle both cases
+        fusion_dim = (d_model // 4) * 3 + coin_embedding_dim  # Max size for 5-channel input
         self.channel_fusion = nn.Sequential(
             nn.Linear(fusion_dim, d_model),
             nn.LayerNorm(d_model),
@@ -268,7 +271,9 @@ class CryptoTransformerV3(nn.Module):
             indicator_avg = (rsi_emb + macd_emb + bb_emb) / 3.0  # (B, L*C or L, d_model//4)
             combined = torch.cat([price_emb, volume_emb, indicator_avg, coin_emb], dim=-1)
         else:
-            combined = torch.cat([price_emb, volume_emb, coin_emb], dim=-1)
+            # For 2-channel input, pad with zeros to match fusion_dim
+            zero_pad = torch.zeros_like(price_emb)  # (B, L*C or L, d_model//4)
+            combined = torch.cat([price_emb, volume_emb, zero_pad, coin_emb], dim=-1)
         
         embedded = self.channel_fusion(combined)  # (B, L*C or L, d_model)
         
