@@ -84,6 +84,9 @@ plots/
 results/
 backtest_results/
 
+# Log files
+*.log
+
 # Config files with sensitive data
 secrets.yaml
 .env
