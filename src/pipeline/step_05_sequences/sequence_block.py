@@ -254,8 +254,10 @@ class SequenceBlock(PipelineBlock):
         # Pre-allocate arrays
         X = np.zeros((num_samples, input_length, num_coins, num_channels), dtype=np.int64)
         
-        # Targets: single-horizon 1h ahead (binary BUY/NO-BUY)
+        # Targets: single-horizon 8h ahead (binary BUY/NO-BUY)
         y_1h = np.zeros(num_samples, dtype=np.int64)
+        # Current price token (at end of input window)
+        y_current = np.zeros(num_samples, dtype=np.int64)
         
         # Create windows using vectorized slicing
         for i in range(num_samples):
@@ -264,6 +266,8 @@ class SequenceBlock(PipelineBlock):
             
             # Single-horizon output: predict at prediction_horizon hours after input window
             y_1h[i] = tokens_array[i+input_length+prediction_horizon-1, target_coin_idx, 0]  # prediction_horizon hours ahead
+            # Current price at end of input window (for directional comparison)
+            y_current[i] = tokens_array[i+input_length-1, target_coin_idx, 0]  # current price
         
         # Single horizon array: (num_samples,)
         y_single = y_1h
@@ -274,10 +278,10 @@ class SequenceBlock(PipelineBlock):
         buy_token_threshold = self.config['model'].get('buy_token_threshold', 171)
         
         if binary_classification:
-            # Binary classification: BUY if token >= threshold, else NO-BUY
+            # Binary classification: DIRECTIONAL - BUY if price goes UP, NO-BUY if flat/down
             y_binary = np.zeros_like(y_single, dtype=np.int64)
-            y_binary[y_single >= buy_token_threshold] = 1  # BUY
-            y_binary[y_single < buy_token_threshold] = 0   # NO-BUY
+            y_binary[y_1h > y_current] = 1  # BUY: future price > current price
+            y_binary[y_1h <= y_current] = 0  # NO-BUY: future price <= current price
             y = y_binary
             
             # Log binary class distribution
