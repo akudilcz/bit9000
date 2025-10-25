@@ -3,6 +3,7 @@
 from src.model.v1_transformer import CryptoTransformerV1
 from src.model.v2_transformer import CryptoTransformerV2
 from src.model.v3_transformer import CryptoTransformerV3
+from src.model.v4_transformer import CryptoTransformerV4
 
 
 def create_model(config):
@@ -13,7 +14,7 @@ def create_model(config):
         config: Configuration dictionary
 
     Returns:
-        Model instance (CryptoTransformerV1, CryptoTransformerV2, or CryptoTransformerV3)
+        Model instance (CryptoTransformerV1, V2, V3, or V4)
     """
     model_type = config['model'].get('type', 'CryptoTransformerV1')
     model_cfg = config['model']
@@ -50,9 +51,34 @@ def create_model(config):
             enable_quantiles=model_cfg.get('enable_quantiles', False),
             target_coin_idx=target_coin_idx,
         )
+    elif model_type == 'CryptoTransformerV4':
+        # V4: Multi-horizon with BTC→XRP attention and time features
+        coins = config['data']['coins']
+        target_coin = config['data']['target_coin']
+        try:
+            target_coin_idx = coins.index(target_coin)
+            btc_idx = coins.index('BTC')
+        except ValueError as e:
+            raise ValueError(f"Required coin not found in coins list {coins}: {e}")
+        
+        return CryptoTransformerV4(
+            vocab_size=model_cfg['vocab_size'],
+            num_classes=model_cfg['num_classes'],
+            num_coins=model_cfg['num_coins'],
+            d_model=model_cfg.get('d_model', 256),
+            nhead=model_cfg.get('nhead', 8),
+            num_encoder_layers=model_cfg.get('num_encoder_layers', 3),
+            num_decoder_layers=model_cfg.get('num_decoder_layers', 3),
+            dim_feedforward=model_cfg.get('dim_feedforward', 1024),
+            dropout=model_cfg.get('dropout', 0.3),
+            coin_embedding_dim=model_cfg.get('coin_embedding_dim', 32),
+            max_seq_len=model_cfg.get('max_seq_len', 1024),
+            target_coin_idx=target_coin_idx,
+            btc_coin_idx=btc_idx,
+        )
     else:
         raise ValueError(f"Unknown model type: {model_type}. "
-                        f"Supported types: CryptoTransformerV1, CryptoTransformerV2, CryptoTransformerV3")
+                        f"Supported types: CryptoTransformerV1, V2, V3, V4")
 
 
-__all__ = ['CryptoTransformerV1', 'CryptoTransformerV2', 'CryptoTransformerV3', 'create_model']
+__all__ = ['CryptoTransformerV1', 'CryptoTransformerV2', 'CryptoTransformerV3', 'CryptoTransformerV4', 'create_model']
