@@ -376,24 +376,25 @@ class EvaluateBlock(PipelineBlock):
         # Get aligned timestamps
         aligned_timestamps = timestamps[sequence_indices] if hasattr(timestamps, '__getitem__') else sequence_indices
         
-        # Create high-resolution chart
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(24, 12), dpi=150)
+        # Create ultra high-resolution chart
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40), dpi=600)
         
         # Plot full price history (no subsampling)
         x_axis = aligned_timestamps if isinstance(aligned_timestamps, pd.DatetimeIndex) else np.arange(len(xrp_current_prices))
         
         # Plot 1: Actual XRP price with buy signals as markers on the line
-        ax1.plot(x_axis, xrp_current_prices, 
-                label='XRP Price (Actual)', linewidth=2, color='steelblue', alpha=0.9, zorder=1)
-        
-        # Overlay buy signals directly on the price line
+        # First plot buy signals (so they appear below the line)
         buy_mask = buy_signals == 1
         if buy_mask.sum() > 0:
             buy_x = x_axis[buy_mask] if isinstance(x_axis, pd.DatetimeIndex) else x_axis[buy_mask]
             buy_y = xrp_current_prices[buy_mask]
             ax1.scatter(buy_x, buy_y, 
-                       s=300, color='lime', marker='^', edgecolors='darkgreen', linewidth=2.5,
-                       label=f'BUY Signal ({buy_mask.sum()} signals)', zorder=5)
+                       s=400, color='lime', marker='^', edgecolors='darkgreen', linewidth=3,
+                       label=f'BUY Signal ({buy_mask.sum()} signals)', zorder=3)
+        
+        # Then plot price line on top (higher zorder)
+        ax1.plot(x_axis, xrp_current_prices, 
+                label='XRP Price (Actual)', linewidth=3, color='steelblue', alpha=0.95, zorder=5)
         
         # Add subtle background shading for BUY correctness
         if isinstance(x_axis, pd.DatetimeIndex):
@@ -411,12 +412,13 @@ class EvaluateBlock(PipelineBlock):
                     ax1.axvspan(x_axis[i], x_axis[i]+1, alpha=0.15, color=color, zorder=0)
         
         ax1.set_xlabel('Time' if isinstance(x_axis, pd.DatetimeIndex) else 'Sample Index', 
-                       fontsize=14, fontweight='bold')
-        ax1.set_ylabel('XRP Price (USD)', fontsize=14, fontweight='bold')
+                       fontsize=28, fontweight='bold')
+        ax1.set_ylabel('XRP Price (USD)', fontsize=28, fontweight='bold')
         ax1.set_title(f'XRP Validation Period with Model BUY Signals ({prediction_horizon}h ahead prediction)', 
-                     fontsize=16, fontweight='bold')
-        ax1.legend(fontsize=12, loc='best')
-        ax1.grid(True, alpha=0.3, linestyle='--')
+                     fontsize=32, fontweight='bold')
+        ax1.legend(fontsize=24, loc='best', markerscale=1.5)
+        ax1.grid(True, alpha=0.3, linestyle='--', linewidth=1.5)
+        ax1.tick_params(axis='both', which='major', labelsize=22)
         
         # Format x-axis for datetime
         if isinstance(x_axis, pd.DatetimeIndex):
@@ -426,19 +428,20 @@ class EvaluateBlock(PipelineBlock):
         
         # Plot 2: Buy probability with threshold
         ax2.plot(x_axis, buy_probs, 
-                label='BUY Probability', linewidth=2, color='steelblue', alpha=0.8)
-        ax2.axhline(y=decision_threshold, color='red', linestyle='--', linewidth=2, 
+                label='BUY Probability', linewidth=3, color='steelblue', alpha=0.8)
+        ax2.axhline(y=decision_threshold, color='red', linestyle='--', linewidth=3, 
                    label=f'Decision Threshold ({decision_threshold:.4f})')
         ax2.fill_between(x_axis, 0, 1, where=(buy_signals==1),
                         alpha=0.2, color='lime', label='BUY Region')
         
         ax2.set_xlabel('Time' if isinstance(x_axis, pd.DatetimeIndex) else 'Sample Index', 
-                       fontsize=14, fontweight='bold')
-        ax2.set_ylabel('Probability', fontsize=14, fontweight='bold')
-        ax2.set_title('Model Confidence for BUY Decisions', fontsize=16, fontweight='bold')
+                       fontsize=28, fontweight='bold')
+        ax2.set_ylabel('Probability', fontsize=28, fontweight='bold')
+        ax2.set_title('Model Confidence for BUY Decisions', fontsize=32, fontweight='bold')
         ax2.set_ylim(0, 1)
-        ax2.legend(fontsize=12, loc='best')
-        ax2.grid(True, alpha=0.3, linestyle='--')
+        ax2.legend(fontsize=24, loc='best')
+        ax2.grid(True, alpha=0.3, linestyle='--', linewidth=1.5)
+        ax2.tick_params(axis='both', which='major', labelsize=22)
         
         # Format x-axis for datetime
         if isinstance(x_axis, pd.DatetimeIndex):
@@ -447,7 +450,7 @@ class EvaluateBlock(PipelineBlock):
         
         plt.tight_layout()
         output_path = output_dir / "xrp_chart_with_buy_signals.png"
-        plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.savefig(output_path, dpi=600, bbox_inches='tight', facecolor='white')
         plt.close()
         
         logger.info(f"    Saved high-resolution chart: {output_path}")
