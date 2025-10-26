@@ -289,25 +289,28 @@ class EvaluateBlock(PipelineBlock):
         """
         logger.info("\n  Generating XRP price chart with buy signals...")
         
-        # Load bin edges from tokenize artifacts
+        # Load actual cleaned data with real prices
         from pathlib import Path
-        tokenize_dir = Path("artifacts/step_04_tokenize")
-        bin_edges_path = tokenize_dir / "bin_edges.json"
+        split_dir = Path("artifacts/step_03_split")
+        val_data_path = split_dir / "val_clean.parquet"
         
-        if not bin_edges_path.exists():
-            logger.warning("  Could not find bin_edges.json, skipping XRP chart")
+        if not val_data_path.exists():
+            logger.warning("  Could not find val_clean.parquet, skipping XRP chart")
             return
         
-        with open(bin_edges_path, 'r') as f:
-            bin_edges_data = json.load(f)
+        val_df = pd.read_parquet(val_data_path)
         
-        # Get XRP price bins
+        # Get target coin (XRP) actual prices
         target_coin = sequences_artifact.target_coin
-        if target_coin not in bin_edges_data:
-            logger.warning(f"  Target coin {target_coin} not found in bin edges, skipping XRP chart")
+        price_col = f"{target_coin}_close"  # Use close price
+        
+        if price_col not in val_df.columns:
+            logger.warning(f"  Price column {price_col} not found in validation data, skipping XRP chart")
             return
         
-        price_bins = np.array(bin_edges_data[target_coin]['price'])
+        # Extract XRP prices and timestamps from validation data
+        xrp_prices = val_df[price_col].values
+        timestamps = val_df.index if isinstance(val_df.index, pd.DatetimeIndex) else pd.to_datetime(val_df['timestamp']) if 'timestamp' in val_df.columns else np.arange(len(val_df))
         
         # Get predictions with probabilities
         model.eval()
@@ -341,79 +344,106 @@ class EvaluateBlock(PipelineBlock):
         
         buy_signals = (buy_probs >= decision_threshold).astype(int)
         
-        # Decode target coin prices (XRP is last coin, channel 0 is price)
-        target_coin_idx = -1  # XRP is last coin
-        xrp_current_tokens = val_X[:, -1, target_coin_idx, 0].numpy()  # (N,)
-        xrp_future_tokens = val_y.numpy()  # (N,) for single-horizon
+        # Now we need to align sequences with actual data
+        # Sequences are created with input_length window + prediction_horizon offset
+        input_length = self.config['sequences']['input_length']
+        prediction_horizon = self.config['sequences'].get('prediction_horizon', 1)
         
-        # Convert tokens to prices using bin edges
-        def token_to_price(tokens, bins):
-            """Convert token indices to price values"""
-            prices = []
-            for token in tokens:
-                if 0 <= token < len(bins):
-                    prices.append(bins[int(token)])
-                else:
-                    prices.append(bins[0])  # Default to first bin
-            return np.array(prices)
+        # Each sequence looks at [i:i+input_length] and predicts at [i+input_length+prediction_horizon-1]
+        # So the "current price" corresponds to position [i+input_length-1] in the original data
+        # The number of sequences = len(val_df) - (input_length + prediction_horizon - 1)
         
-        xrp_current_prices = token_to_price(xrp_current_tokens, price_bins)
-        xrp_future_prices = token_to_price(xrp_future_tokens, price_bins)
+        # Align actual prices with sequence predictions
+        # The current price for sequence i is at position (input_length - 1) + i in the validation data
+        sequence_indices = np.arange(len(val_X)) + input_length - 1
+        
+        # Ensure we don't exceed the validation data bounds
+        valid_mask = sequence_indices < len(xrp_prices)
+        sequence_indices = sequence_indices[valid_mask]
+        buy_probs = buy_probs[valid_mask]
+        buy_signals = buy_signals[valid_mask]
+        
+        # Get current and future prices
+        xrp_current_prices = xrp_prices[sequence_indices]
+        future_indices = sequence_indices + prediction_horizon
+        future_indices = np.clip(future_indices, 0, len(xrp_prices) - 1)
+        xrp_future_prices = xrp_prices[future_indices]
         
         # Calculate price changes
         price_changes = xrp_future_prices - xrp_current_prices
         is_up = price_changes > 0
         
+        # Get aligned timestamps
+        aligned_timestamps = timestamps[sequence_indices] if hasattr(timestamps, '__getitem__') else sequence_indices
+        
         # Create high-resolution chart
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(24, 12), dpi=150)
         
-        # Subsample for clarity (plot every 10th point)
-        sample_indices = np.arange(0, len(xrp_current_prices), 10)
+        # Plot full price history (no subsampling)
+        x_axis = aligned_timestamps if isinstance(aligned_timestamps, pd.DatetimeIndex) else np.arange(len(xrp_current_prices))
         
-        # Plot 1: Price chart with buy signals
-        ax1.plot(sample_indices, xrp_current_prices[sample_indices], 
-                label='Current XRP Price', linewidth=2, color='steelblue', alpha=0.8)
-        ax1.scatter(sample_indices, xrp_current_prices[sample_indices], 
-                   s=30, color='steelblue', alpha=0.5, zorder=2)
+        # Plot 1: Actual XRP price with buy signals as markers on the line
+        ax1.plot(x_axis, xrp_current_prices, 
+                label='XRP Price (Actual)', linewidth=2, color='steelblue', alpha=0.9, zorder=1)
         
-        # Overlay buy signals
-        buy_mask = buy_signals[sample_indices] == 1
-        buy_indices = sample_indices[buy_mask]
-        ax1.scatter(buy_indices, xrp_current_prices[buy_indices], 
-                   s=200, color='lime', marker='^', edgecolors='darkgreen', linewidth=2,
-                   label='BUY Signal', zorder=5)
+        # Overlay buy signals directly on the price line
+        buy_mask = buy_signals == 1
+        if buy_mask.sum() > 0:
+            buy_x = x_axis[buy_mask] if isinstance(x_axis, pd.DatetimeIndex) else x_axis[buy_mask]
+            buy_y = xrp_current_prices[buy_mask]
+            ax1.scatter(buy_x, buy_y, 
+                       s=300, color='lime', marker='^', edgecolors='darkgreen', linewidth=2.5,
+                       label=f'BUY Signal ({buy_mask.sum()} signals)', zorder=5)
         
-        # Color background by correctness
-        for i in range(len(sample_indices) - 1):
-            idx = sample_indices[i]
-            next_idx = sample_indices[i+1]
-            
-            if buy_signals[idx]:
-                # If buy signal issued, color green if correct, red if wrong
-                color = 'lightgreen' if is_up[idx] else 'lightcoral'
-                alpha = 0.1
-                ax1.axvspan(i, i+1, alpha=alpha, color=color)
+        # Add subtle background shading for BUY correctness
+        if isinstance(x_axis, pd.DatetimeIndex):
+            # For time series, use axvspan with actual timestamps
+            for i in range(len(buy_signals)):
+                if buy_signals[i]:
+                    color = 'lightgreen' if is_up[i] else 'lightcoral'
+                    if i < len(x_axis) - 1:
+                        ax1.axvspan(x_axis[i], x_axis[i+1], alpha=0.15, color=color, zorder=0)
+        else:
+            # For indices, use axvspan with indices
+            for i in range(len(buy_signals)):
+                if buy_signals[i]:
+                    color = 'lightgreen' if is_up[i] else 'lightcoral'
+                    ax1.axvspan(x_axis[i], x_axis[i]+1, alpha=0.15, color=color, zorder=0)
         
-        ax1.set_xlabel('Sample Index', fontsize=14, fontweight='bold')
-        ax1.set_ylabel('XRP Price ($)', fontsize=14, fontweight='bold')
-        ax1.set_title('XRP Validation Period with Model BUY Signals', 
+        ax1.set_xlabel('Time' if isinstance(x_axis, pd.DatetimeIndex) else 'Sample Index', 
+                       fontsize=14, fontweight='bold')
+        ax1.set_ylabel('XRP Price (USD)', fontsize=14, fontweight='bold')
+        ax1.set_title(f'XRP Validation Period with Model BUY Signals ({prediction_horizon}h ahead prediction)', 
                      fontsize=16, fontweight='bold')
         ax1.legend(fontsize=12, loc='best')
         ax1.grid(True, alpha=0.3, linestyle='--')
         
+        # Format x-axis for datetime
+        if isinstance(x_axis, pd.DatetimeIndex):
+            import matplotlib.dates as mdates
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
+        
         # Plot 2: Buy probability with threshold
-        ax2.plot(sample_indices, buy_probs[sample_indices], 
+        ax2.plot(x_axis, buy_probs, 
                 label='BUY Probability', linewidth=2, color='steelblue', alpha=0.8)
-        ax2.axhline(y=0.5, color='red', linestyle='--', linewidth=2, label='Decision Threshold (0.5)')
-        ax2.fill_between(sample_indices, 0, 1, where=(buy_signals[sample_indices]==1),
+        ax2.axhline(y=decision_threshold, color='red', linestyle='--', linewidth=2, 
+                   label=f'Decision Threshold ({decision_threshold:.4f})')
+        ax2.fill_between(x_axis, 0, 1, where=(buy_signals==1),
                         alpha=0.2, color='lime', label='BUY Region')
         
-        ax2.set_xlabel('Sample Index', fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Time' if isinstance(x_axis, pd.DatetimeIndex) else 'Sample Index', 
+                       fontsize=14, fontweight='bold')
         ax2.set_ylabel('Probability', fontsize=14, fontweight='bold')
         ax2.set_title('Model Confidence for BUY Decisions', fontsize=16, fontweight='bold')
         ax2.set_ylim(0, 1)
         ax2.legend(fontsize=12, loc='best')
         ax2.grid(True, alpha=0.3, linestyle='--')
+        
+        # Format x-axis for datetime
+        if isinstance(x_axis, pd.DatetimeIndex):
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
         
         plt.tight_layout()
         output_path = output_dir / "xrp_chart_with_buy_signals.png"
