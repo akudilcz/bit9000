@@ -158,8 +158,10 @@ class TrainBlock(PipelineBlock):
         }
         if binary_classification:
             history['buy_precision'] = []
+            history['calibrated_threshold'] = []
         
         best_val_loss = float('inf')
+        best_calibrated_threshold = 0.5
         patience_counter = 0
         best_model_state = None
         
@@ -175,10 +177,11 @@ class TrainBlock(PipelineBlock):
             )
 
             if binary_classification:
-                val_loss, val_acc, buy_precision = val_result
+                val_loss, val_acc, buy_precision, optimal_threshold = val_result
             else:
                 val_loss, val_acc = val_result
                 buy_precision = None
+                optimal_threshold = None
             
             # Update scheduler
             scheduler.step()
@@ -189,7 +192,8 @@ class TrainBlock(PipelineBlock):
             history['val_loss'].append(val_loss)
             history['val_acc'].append(val_acc)
             if binary_classification:
-                history['buy_precision'].append(buy_precision)
+                history['buy_precision'].append(float(buy_precision))
+                history['calibrated_threshold'].append(float(optimal_threshold))
 
             # Log progress
             log_msg = (
@@ -206,6 +210,8 @@ class TrainBlock(PipelineBlock):
                 best_val_loss = val_loss
                 best_val_acc = val_acc
                 best_model_state = model.state_dict().copy()
+                if binary_classification and optimal_threshold is not None:
+                    best_calibrated_threshold = optimal_threshold
                 patience_counter = 0
                 logger.info(f"    → New best model (val_loss={best_val_loss:.4f})")
             else:
@@ -225,13 +231,16 @@ class TrainBlock(PipelineBlock):
         
         # Save model
         model_path = block_dir / "model.pt"
-        torch.save({
+        checkpoint = {
             'model_state_dict': model.state_dict(),
             'config': self.config,
             'epoch': len(history['val_loss']),
             'best_val_loss': best_val_loss,
             'best_val_acc': best_val_acc
-        }, model_path)
+        }
+        if binary_classification:
+            checkpoint['calibrated_threshold'] = best_calibrated_threshold
+        torch.save(checkpoint, model_path)
         logger.info(f"  Saved model: {model_path}")
         
         # Save history
@@ -538,9 +547,10 @@ class TrainBlock(PipelineBlock):
                 logger.info(f"  ✓ BUY PRECISION: {precision:.1%} (when we say BUY, we're right {precision:.1%} of the time)")
             else:
                 logger.info(f"  ✓ BUY PRECISION: N/A (no BUY signals issued)")
+            logger.info(f"  Optimal threshold: {optimal_threshold:.4f}")
             logger.info(f"  ==========================================")
 
-            return avg_loss, avg_acc, precision
+            return avg_loss, avg_acc, precision, optimal_threshold
 
         return avg_loss, avg_acc
     
