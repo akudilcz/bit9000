@@ -376,8 +376,9 @@ class EvaluateBlock(PipelineBlock):
         # Get aligned timestamps
         aligned_timestamps = timestamps[sequence_indices] if hasattr(timestamps, '__getitem__') else sequence_indices
         
-        # Create ultra high-resolution chart
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40), dpi=600)
+        # Create high-resolution chart (8000x8000 pixels total)
+        # 8000 pixels / 200 DPI = 40 inch figure
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40), dpi=200)
         
         # Plot full price history (no subsampling)
         x_axis = aligned_timestamps if isinstance(aligned_timestamps, pd.DatetimeIndex) else np.arange(len(xrp_current_prices))
@@ -450,7 +451,7 @@ class EvaluateBlock(PipelineBlock):
         
         plt.tight_layout()
         output_path = output_dir / "xrp_chart_with_buy_signals.png"
-        plt.savefig(output_path, dpi=600, bbox_inches='tight', facecolor='white')
+        plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='white')
         plt.close()
         
         logger.info(f"    Saved high-resolution chart: {output_path}")
