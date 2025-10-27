@@ -54,12 +54,26 @@ class EarlySplitBlock(PipelineBlock):
         train_df = df.iloc[:split_idx].copy()
         val_df = df.iloc[split_idx:].copy()
         
+        # Determine timestamp series for logging and metadata
+        if 'timestamp' in train_df.columns:
+            ts_train = pd.to_datetime(train_df['timestamp'])
+        else:
+            ts_train = pd.DatetimeIndex(train_df.index)
+        if 'timestamp' in val_df.columns:
+            ts_val = pd.to_datetime(val_df['timestamp'])
+        else:
+            ts_val = pd.DatetimeIndex(val_df.index)
+
         logger.info(f"Split data temporally:")
         logger.info(f"  Total samples: {total_samples}")
         logger.info(f"  Train samples: {len(train_df)} ({len(train_df)/24:.1f} days)")
         logger.info(f"  Val samples: {len(val_df)} ({len(val_df)/24:.1f} days)")
-        logger.info(f"  Train period: {train_df.index[0]} to {train_df.index[-1]}")
-        logger.info(f"  Val period: {val_df.index[0]} to {val_df.index[-1]}")
+        train_start = ts_train[0]
+        train_end = ts_train[-1]
+        val_start = ts_val[0]
+        val_end = ts_val[-1]
+        logger.info(f"  Train period: {train_start} to {train_end}")
+        logger.info(f"  Val period: {val_start} to {val_end}")
         
         # Save as parquet with full metadata preservation
         train_path = self.artifact_io.write_dataframe(
@@ -79,10 +93,10 @@ class EarlySplitBlock(PipelineBlock):
             val_path=val_path,
             train_samples=len(train_df),
             val_samples=len(val_df),
-            train_start_date=train_df.index[0],
-            train_end_date=train_df.index[-1],
-            val_start_date=val_df.index[0],
-            val_end_date=val_df.index[-1],
+            train_start_date=train_start,
+            train_end_date=train_end,
+            val_start_date=val_start,
+            val_end_date=val_end,
             metadata=self.create_metadata(
                 upstream_inputs={"clean_data": str(clean_artifact.path)}
             )

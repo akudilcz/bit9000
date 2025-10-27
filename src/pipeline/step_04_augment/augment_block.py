@@ -24,9 +24,15 @@ class AugmentBlock(PipelineBlock):
         Returns:
             DataFrame with time features added
         """
-        # Extract time features from timestamp index
-        hour_of_day = df.index.hour  # 0-23
-        day_of_week = df.index.dayofweek  # 0=Monday, 6=Sunday
+        # Extract time features from timestamp index or timestamp column
+        if 'timestamp' in df.columns:
+            timestamps = pd.to_datetime(df['timestamp'])
+            hour_of_day = timestamps.dt.hour  # 0-23
+            day_of_week = timestamps.dt.dayofweek  # 0=Monday, 6=Sunday
+        else:
+            timestamps = pd.to_datetime(df.index)
+            hour_of_day = timestamps.hour  # 0-23
+            day_of_week = timestamps.dayofweek  # 0=Monday, 6=Sunday
         
         # Normalize to 0-1 range for better tokenization
         hour_normalized = hour_of_day / 23.0  # 0.0 to 1.0

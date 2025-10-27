@@ -44,17 +44,29 @@ class InferenceArtifact:
 class InferenceBlock(PipelineBlock):
     """Run inference on latest data"""
     
-    def run(self, train_artifact, tokenize_artifact):
+    def run(self, train_artifact=None, tokenize_artifact=None):
         """
         Run inference to predict next 8 hours
         
         Args:
-            train_artifact: TrainedModelArtifact from step_07_train
-            tokenize_artifact: TokenizeArtifact from step_05_tokenize (for thresholds)
+            train_artifact: TrainedModelArtifact from step_07_train (optional, will load if not provided)
+            tokenize_artifact: TokenizeArtifact from step_05_tokenize (optional, will load if not provided)
             
         Returns:
             InferenceArtifact
         """
+        # Load artifacts if not provided
+        if train_artifact is None:
+            from src.pipeline.schemas import TrainedModelArtifact
+            train_artifact_path = Path("artifacts/step_07_train/train_artifact.json")
+            train_artifact = TrainedModelArtifact.model_validate_json(train_artifact_path.read_text())
+            logger.info(f"  Loaded train artifact: {train_artifact_path}")
+        
+        if tokenize_artifact is None:
+            from src.pipeline.schemas import TokenizeArtifact
+            tokenize_artifact_path = Path("artifacts/step_05_tokenize/tokenize_artifact.json")
+            tokenize_artifact = TokenizeArtifact.model_validate_json(tokenize_artifact_path.read_text())
+            logger.info(f"  Loaded tokenize artifact: {tokenize_artifact_path}")
         logger.info("="*70)
         logger.info("STEP 8: INFERENCE - Predicting next 8 hours")
         logger.info("="*70)
@@ -71,7 +83,7 @@ class InferenceBlock(PipelineBlock):
         # Load model
         logger.info("\n[1/5] Loading trained model...")
         model = create_model(self.config)
-        checkpoint = torch.load(train_artifact.model_path, map_location=device)
+        checkpoint = torch.load(train_artifact.model_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         model = model.to(device)
         model.eval()

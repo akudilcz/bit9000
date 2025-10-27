@@ -41,24 +41,27 @@ tokenization:
 sequences:
   input_length: 48            # 48 hours (2 days) of historical context
   output_length: 1            # Single prediction
-  num_channels: 21            # 21 channels: price, volume + 17 technical indicators + 2 time features
-  prediction_horizon: 4        # Predict 4 hours ahead (easier signal)
+  num_channels: 9             # Align with current sequences (price, volume + key indicators)
+  prediction_horizon: 1        # Predict 1 hour ahead
 
 # =============================================================================
 # MODEL ARCHITECTURE
 # =============================================================================
 model:
+  version: v4
   vocab_size: 256
   num_classes: 256
   num_coins: 10
   
-  # Architecture (moderate size with ordinal loss)
-  d_model: 192
-  nhead: 6
-  num_encoder_layers: 3
-  num_decoder_layers: 2
-  dim_feedforward: 768
-  dropout: 0.2
+  # Architecture (moderately larger to prevent mode collapse)
+  d_model: 256
+  nhead: 8
+  num_encoder_layers: 4
+  num_decoder_layers: 3
+  dim_feedforward: 1024
+  dropout: 0.1
+  channel_hidden_dim: 96
+  channel_nhead: 4
   
   # Embeddings
   coin_embedding_dim: 16
@@ -75,20 +78,20 @@ model:
 # =============================================================================
 training:
   device: cuda
-  epochs: 5
-  batch_size: 192
+  epochs: 12
+  batch_size: 128
   num_workers: 0
   
   # Optimizer
-  learning_rate: 0.001
-  weight_decay: 0.0001
+  learning_rate: 0.0005
+  weight_decay: 0.001
   max_grad_norm: 1.0
   
   # Regularization
-  dropout: 0.2
-  label_smoothing: 0.05
-  ordinal_sigma: 8.0  # Spread for soft ordinal targets
-  gaussian_noise: 0.0
+  dropout: 0.1
+  label_smoothing: 0.1
+  gaussian_noise: 0.01
+  ordinal_sigma: 10.0
   
   # Learning rate schedule
   scheduler: warmup_cosine

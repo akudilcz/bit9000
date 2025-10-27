@@ -112,11 +112,10 @@ class TrainBlock(PipelineBlock):
         # Loss and optimizer
         # Use ordinal loss to respect that tokens represent ordered returns
         from src.utils.ordinal_loss import SoftOrdinalCrossEntropyLoss
-        label_smoothing = train_config.get('label_smoothing', 0.1)
-        sigma = train_config.get('ordinal_sigma', 8.0)  # Controls spread of soft targets
+        label_smoothing = train_config.get('label_smoothing', 0.0)
+        sigma = train_config.get('ordinal_sigma', 10.0)  # Controls spread of soft targets
         criterion = SoftOrdinalCrossEntropyLoss(num_classes=256, sigma=sigma, label_smoothing=label_smoothing)
         logger.info(f"  Using Soft Ordinal CE Loss (sigma={sigma}, label_smoothing={label_smoothing})")
-        logger.info(f"  This respects that nearby tokens (returns) are similar")
         optimizer = optim.Adam(
             model.parameters(),
             lr=learning_rate,
