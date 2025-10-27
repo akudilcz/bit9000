@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.model.v1_transformer import CryptoTransformerV1
+from src.model.v4_transformer import CryptoTransformerV4
 
 
 def test_early_stopping():
@@ -19,7 +19,7 @@ def test_early_stopping():
 
 
 def test_token_predictor_initialization():
-    """Test CryptoTransformerV1 model creation"""
+    """Test CryptoTransformerV4 model creation"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -27,7 +27,7 @@ def test_token_predictor_initialization():
         'sequences': {
             'input_length': 24,
             'output_length': 8,
-            'num_channels': 2
+            'num_channels': 9
         },
         'model': {
             'embedding_dim': 32,
@@ -39,7 +39,23 @@ def test_token_predictor_initialization():
         }
     }
     
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     # Test model was created
     assert model is not None
@@ -47,11 +63,11 @@ def test_token_predictor_initialization():
     assert model.input_length == 24
     assert model.output_length == 8
     assert model.num_coins == 3
-    assert model.num_channels == 2
+    assert model.num_channels == 9
 
 
 def test_token_predictor_forward_pass():
-    """Test CryptoTransformerV1 forward pass"""
+    """Test CryptoTransformerV4 forward pass"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -59,7 +75,7 @@ def test_token_predictor_forward_pass():
         'sequences': {
             'input_length': 24,
             'output_length': 8,
-            'num_channels': 2
+            'num_channels': 9
         },
         'model': {
             'embedding_dim': 32,
@@ -71,7 +87,23 @@ def test_token_predictor_forward_pass():
         }
     }
     
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     # Test forward pass with training mode (teacher forcing)
     batch_size = 4
@@ -93,7 +125,7 @@ def test_token_predictor_forward_pass():
 
 
 def test_token_predictor_inference():
-    """Test CryptoTransformerV1 inference mode"""
+    """Test CryptoTransformerV4 inference mode"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -101,7 +133,7 @@ def test_token_predictor_inference():
         'sequences': {
             'input_length': 24,
             'output_length': 8,
-            'num_channels': 2
+            'num_channels': 9
         },
         'model': {
             'embedding_dim': 32,
@@ -113,7 +145,23 @@ def test_token_predictor_inference():
         }
     }
     
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     model.eval()
     
     # Test inference mode (no targets)
@@ -132,7 +180,7 @@ def test_token_predictor_inference():
 
 
 def test_token_predictor_generate():
-    """Test CryptoTransformerV1 autoregressive generation"""
+    """Test CryptoTransformerV4 autoregressive generation"""
     config = {
         'data': {
             'coins': ['BTC', 'ETH', 'XRP']
@@ -140,7 +188,7 @@ def test_token_predictor_generate():
         'sequences': {
             'input_length': 24,
             'output_length': 8,
-            'num_channels': 2
+            'num_channels': 9
         },
         'model': {
             'embedding_dim': 32,
@@ -152,7 +200,23 @@ def test_token_predictor_generate():
         }
     }
     
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     # Test autoregressive generation
     batch_size = 2
@@ -181,7 +245,7 @@ def test_token_predictor_dimensions():
         'sequences': {
             'input_length': 24,
             'output_length': 8,
-            'num_channels': 2
+            'num_channels': 9
         },
         'model': {
             'embedding_dim': 64,
@@ -193,7 +257,23 @@ def test_token_predictor_dimensions():
         }
     }
     
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     # Verify dimensions
     assert model.embedding_dim == 64
@@ -216,7 +296,7 @@ def test_token_predictor_invalid_dimensions():
         'sequences': {
             'input_length': 24,
             'output_length': 8,
-            'num_channels': 2
+            'num_channels': 9
         },
         'model': {
             'embedding_dim': 32,
@@ -230,5 +310,21 @@ def test_token_predictor_invalid_dimensions():
     
     # Should raise ValueError because d_model is not divisible by num_heads
     with pytest.raises(ValueError, match="d_model.*must be divisible by nhead"):
-        model = CryptoTransformerV1(config)
+        model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
 

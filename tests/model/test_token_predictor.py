@@ -1,8 +1,8 @@
-"""Tests for CryptoTransformerV1 model architecture"""
+"""Tests for CryptoTransformerV4 model architecture"""
 
 import pytest
 import torch
-from src.model.v1_transformer import CryptoTransformerV1
+from src.model.v4_transformer import CryptoTransformerV4
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def config():
         'sequences': {
             'input_length': 24,
             'output_length': 8,
-            'num_channels': 2
+            'num_channels': 9
         },
         'data': {
             'coins': ['BTC', 'ETH', 'XRP', 'BNB', 'SOL', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LTC']
@@ -31,7 +31,23 @@ def config():
 
 def test_model_accepts_correct_input_shape(config):
     """Test that model accepts input shape (batch, 24, num_coins, 2)"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     batch_size = 16
     input_length = config['sequences']['input_length']
@@ -51,7 +67,23 @@ def test_model_accepts_correct_input_shape(config):
 
 def test_model_output_shape(config):
     """Test that model output shape is (batch, 8, 3) for 8-step predictions with teacher forcing"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     batch_size = 16
     input_length = config['sequences']['input_length']
@@ -74,7 +106,23 @@ def test_model_output_shape(config):
 
 def test_model_handles_different_batch_sizes(config):
     """Test that model works with different batch sizes"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     input_length = config['sequences']['input_length']
     num_coins = len(config['data']['coins'])
@@ -88,7 +136,23 @@ def test_model_handles_different_batch_sizes(config):
 
 def test_model_outputs_valid_logits(config):
     """Test that model outputs are valid logits (not probabilities)"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     batch_size = 16
     input_length = config['sequences']['input_length']
@@ -106,7 +170,23 @@ def test_model_outputs_valid_logits(config):
 
 def test_model_parameters_count_reasonable(config):
     """Test that model has reasonable number of parameters (< 10M)"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     total_params = sum(p.numel() for p in model.parameters())
     
@@ -121,7 +201,23 @@ def test_model_parameters_count_reasonable(config):
 
 def test_model_embedding_dimensions(config):
     """Test that model has separate embeddings for price and volume"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     # Model should have token embeddings
     # Check if model has expected components
@@ -131,7 +227,23 @@ def test_model_embedding_dimensions(config):
 
 def test_model_eval_mode(config):
     """Test that model can be set to eval mode"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     
     # Set to eval mode
     model.eval()
@@ -151,7 +263,23 @@ def test_model_eval_mode(config):
 
 def test_model_training_mode(config):
     """Test that model can be trained with teacher forcing"""
-    model = CryptoTransformerV1(config)
+    model = CryptoTransformerV4(
+        vocab_size=3,
+        num_classes=3,
+        num_coins=3,
+        d_model=128,
+        nhead=4,
+        num_encoder_layers=2,
+        num_decoder_layers=2,
+        dim_feedforward=256,
+        dropout=0.1,
+        coin_embedding_dim=16,
+        max_seq_len=1024,
+        target_coin_idx=2,  # XRP
+        btc_coin_idx=0,  # BTC
+        binary_classification=False,
+        num_channels=9
+    )
     model.train()
     
     batch_size = 16

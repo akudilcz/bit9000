@@ -49,8 +49,8 @@ class InferenceBlock(PipelineBlock):
         Run inference to predict next 8 hours
         
         Args:
-            train_artifact: TrainedModelArtifact from step_06_train
-            tokenize_artifact: TokenizeArtifact from step_04_tokenize (for thresholds)
+            train_artifact: TrainedModelArtifact from step_07_train
+            tokenize_artifact: TokenizeArtifact from step_05_tokenize (for thresholds)
             
         Returns:
             InferenceArtifact
@@ -115,7 +115,7 @@ class InferenceBlock(PipelineBlock):
             logger.info(f"    Hour {pred['hour']}: {pred['prediction']} (confidence: {pred['confidence']:.2f})")
         
         # Save results
-        block_dir = self.artifact_io.get_block_dir("step_08_inference", clean=True)
+        block_dir = self.artifact_io.get_block_dir("step_09_inference", clean=True)
         predictions_path = block_dir / f"predictions_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
         
         with open(predictions_path, 'w') as f:
@@ -138,7 +138,7 @@ class InferenceBlock(PipelineBlock):
         # Write artifact manifest
         self.artifact_io.write_json(
             artifact.model_dump(mode='json'),
-            block_name="step_08_inference",
+            block_name="step_09_inference",
             artifact_name="inference_artifact"
         )
         

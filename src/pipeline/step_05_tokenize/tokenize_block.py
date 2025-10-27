@@ -1,7 +1,7 @@
 """Step 4: Tokenize - Convert prices, volume, and indicators to discrete token sequences
 
 Philosophy: Price movements + volume + technical indicators → discrete tokens (256-bin quantization)
-- 5 channels: price (log returns), volume (log changes), RSI, MACD, Bollinger Band position
+- 9 channels: price, volume, RSI, MACD, Bollinger Band position, EMA-9, EMA-21, EMA-50, EMA-ratio
 - Quantile-based binning ensures uniform distribution across 256 bins
 - Technical indicators provide momentum and trend context
 - Fit bin edges on train data only (no leakage)
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 class TokenizeArtifact:
-    """Artifact for tokenized data with 5 channels (price, volume, rsi, macd, bb_position)"""
+    """Artifact for tokenized data with 9 channels (price, volume, rsi, macd, bb_position, ema_9, ema_21, ema_50, ema_ratio)"""
     def __init__(self, train_path: Path, val_path: Path, 
                  train_shape: Tuple[int, int], val_shape: Tuple[int, int],
                  thresholds_path: Path, token_distribution: Dict[int, Dict[str, float]],
@@ -88,7 +88,7 @@ class TokenizeBlock(PipelineBlock):
         # Get coin list from config
         coins = self.config['data']['coins']
         logger.info(f"  Coins: {coins}")
-        logger.info(f"  Channels: price + volume + rsi + macd + bb_position (5 channels)")
+        logger.info(f"  Channels: price + volume + rsi + macd + bb_position + ema_9 + ema_21 + ema_50 + ema_ratio (9 channels)")
         
         # FIT: Calculate quantile-based bin edges on training data
         logger.info("\n[2/4] FIT: Calculating quantile-based bin edges on TRAINING data...")
@@ -104,12 +104,21 @@ class TokenizeBlock(PipelineBlock):
                 rsi_edges = bin_edges[coin]['rsi']
                 macd_edges = bin_edges[coin]['macd']
                 bb_edges = bin_edges[coin]['bb_position']
+                ema9_edges = bin_edges[coin].get('ema_9', np.array([]))
+                ema21_edges = bin_edges[coin].get('ema_21', np.array([]))
+                ema50_edges = bin_edges[coin].get('ema_50', np.array([]))
+                ema_ratio_edges = bin_edges[coin].get('ema_ratio', np.array([]))
                 logger.info(f"  {coin}:")
                 logger.info(f"    Price:  {len(price_edges)} bin edges (min={price_edges.min():.6f}, max={price_edges.max():.6f})")
                 logger.info(f"    Volume: {len(volume_edges)} bin edges (min={volume_edges.min():.6f}, max={volume_edges.max():.6f})")
                 logger.info(f"    RSI: {len(rsi_edges)} bin edges (min={rsi_edges.min():.6f}, max={rsi_edges.max():.6f})")
                 logger.info(f"    MACD: {len(macd_edges)} bin edges (min={macd_edges.min():.6f}, max={macd_edges.max():.6f})")
                 logger.info(f"    BB_Pos: {len(bb_edges)} bin edges (min={bb_edges.min():.6f}, max={bb_edges.max():.6f})")
+                if len(ema9_edges) > 0:
+                    logger.info(f"    EMA_9: {len(ema9_edges)} bin edges (min={ema9_edges.min():.6f}, max={ema9_edges.max():.6f})")
+                    logger.info(f"    EMA_21: {len(ema21_edges)} bin edges (min={ema21_edges.min():.6f}, max={ema21_edges.max():.6f})")
+                    logger.info(f"    EMA_50: {len(ema50_edges)} bin edges (min={ema50_edges.min():.6f}, max={ema50_edges.max():.6f})")
+                    logger.info(f"    EMA_Ratio: {len(ema_ratio_edges)} bin edges (min={ema_ratio_edges.min():.6f}, max={ema_ratio_edges.max():.6f})")
         
         # TRANSFORM: Apply bin edges to train and val
         logger.info("\n[3/4] TRANSFORM: Tokenizing train and val data...")
@@ -139,7 +148,7 @@ class TokenizeBlock(PipelineBlock):
         
         # Save artifacts
         logger.info("\n[4/4] Saving artifacts...")
-        block_dir = self.artifact_io.get_block_dir("step_04_tokenize", clean=True)
+        block_dir = self.artifact_io.get_block_dir("step_05_tokenize", clean=True)
         
         # Save token dataframes
         train_path = block_dir / "train_tokens.parquet"
@@ -161,7 +170,11 @@ class TokenizeBlock(PipelineBlock):
                 'volume': channels['volume'].tolist(),
                 'rsi': channels['rsi'].tolist(),
                 'macd': channels['macd'].tolist(),
-                'bb_position': channels['bb_position'].tolist()
+                'bb_position': channels['bb_position'].tolist(),
+                'ema_9': channels.get('ema_9', np.array([])).tolist(),
+                'ema_21': channels.get('ema_21', np.array([])).tolist(),
+                'ema_50': channels.get('ema_50', np.array([])).tolist(),
+                'ema_ratio': channels.get('ema_ratio', np.array([])).tolist()
             }
         with open(bin_edges_path, 'w') as f:
             json.dump(bin_edges_serializable, f, indent=2)
@@ -171,7 +184,7 @@ class TokenizeBlock(PipelineBlock):
         self._plot_token_distribution(token_distribution, vocab_size, block_dir)
         
         # Create artifact
-        num_channels = 5  # price + volume + rsi + macd + bb_position
+        num_channels = 9  # price + volume + rsi + macd + bb_position + ema_9 + ema_21 + ema_50 + ema_ratio
         artifact = TokenizeArtifact(
             train_path=train_path,
             val_path=val_path,
@@ -190,21 +203,21 @@ class TokenizeBlock(PipelineBlock):
         # Write artifact manifest
         self.artifact_io.write_json(
             artifact.model_dump(mode='json'),
-            block_name="step_04_tokenize",
+            block_name="step_05_tokenize",
             artifact_name="tokenize_artifact"
         )
         
         logger.info("\n" + "="*70)
         logger.info("TOKENIZATION COMPLETE")
-        logger.info(f"  Train: {train_tokens.shape[0]:,} timesteps × {len(coins)} coins × 5 channels")
-        logger.info(f"  Val: {val_tokens.shape[0]:,} timesteps × {len(coins)} coins × 5 channels")
+        logger.info(f"  Train: {train_tokens.shape[0]:,} timesteps × {len(coins)} coins × 9 channels")
+        logger.info(f"  Val: {val_tokens.shape[0]:,} timesteps × {len(coins)} coins × 9 channels")
         logger.info("="*70 + "\n")
         
         return artifact
     
     def _fit_bin_edges(self, train_df: pd.DataFrame, coins: list) -> Dict[str, Dict[str, np.ndarray]]:
         """
-        FIT: Calculate quantile-based bin edges on training data for all 5 channels
+        FIT: Calculate quantile-based bin edges on training data for all 9 channels
         
         For each coin:
         - Price channel: Compute hourly log returns: r = log(close[t] / close[t-1])
@@ -212,17 +225,22 @@ class TokenizeBlock(PipelineBlock):
         - RSI channel: Direct values (already 0-1)
         - MACD channel: Direct histogram values (already normalized)
         - BB Position channel: Direct values (already 0-1)
+        - EMA-9, EMA-21, EMA-50: Already normalized to [0, 1]
+        - EMA-Ratio: Already normalized to [0, 1]
         - For each channel, find 255 quantile thresholds to create 256 bins
         
         Args:
-            train_df: Training data with COIN_close, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position
+            train_df: Training data with COIN_close, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position,
+                      COIN_ema_9, COIN_ema_21, COIN_ema_50, COIN_ema_ratio
             coins: List of coin symbols
             
         Returns:
-            Dictionary {coin: {price: bin_edges, volume: bin_edges, rsi: bin_edges, macd: bin_edges, bb_position: bin_edges}}
+            Dictionary {coin: {price: edges, volume: edges, rsi: edges, macd: edges, bb_position: edges,
+                              ema_9: edges, ema_21: edges, ema_50: edges, ema_ratio: edges}}
         """
         vocab_size = self.config['tokenization']['vocab_size']  # 256
-        percentiles = self.config['tokenization']['percentiles']  # [1, 2, ..., 99]
+        # Generate percentiles at runtime: evenly spaced from 0.4 to 99.6 (255 edges for 256 bins)
+        percentiles = np.linspace(0.4, 99.6, vocab_size - 1)
         
         bin_edges = {}
         
@@ -232,6 +250,10 @@ class TokenizeBlock(PipelineBlock):
             rsi_col = f"{coin}_rsi"
             macd_col = f"{coin}_macd"
             bb_col = f"{coin}_bb_position"
+            ema9_col = f"{coin}_ema_9"
+            ema21_col = f"{coin}_ema_21"
+            ema50_col = f"{coin}_ema_50"
+            ema_ratio_col = f"{coin}_ema_ratio"
             
             if close_col not in train_df.columns or volume_col not in train_df.columns:
                 logger.warning(f"  Missing price/volume columns for {coin}, skipping")
@@ -239,6 +261,10 @@ class TokenizeBlock(PipelineBlock):
             
             if rsi_col not in train_df.columns or macd_col not in train_df.columns or bb_col not in train_df.columns:
                 logger.warning(f"  Missing indicator columns for {coin}, skipping")
+                continue
+            
+            if ema9_col not in train_df.columns or ema21_col not in train_df.columns or ema50_col not in train_df.columns or ema_ratio_col not in train_df.columns:
+                logger.warning(f"  Missing EMA columns for {coin}, skipping")
                 continue
             
             # Compute log returns for price
@@ -255,6 +281,10 @@ class TokenizeBlock(PipelineBlock):
             rsi_values = train_df[rsi_col].dropna()
             macd_values = train_df[macd_col].dropna()
             bb_values = train_df[bb_col].dropna()
+            ema9_values = train_df[ema9_col].dropna()
+            ema21_values = train_df[ema21_col].dropna()
+            ema50_values = train_df[ema50_col].dropna()
+            ema_ratio_values = train_df[ema_ratio_col].dropna()
             
             if len(price_returns) == 0 or len(volume_changes) == 0:
                 logger.warning(f"  No valid price/volume data for {coin}, skipping")
@@ -264,19 +294,31 @@ class TokenizeBlock(PipelineBlock):
                 logger.warning(f"  No valid indicator data for {coin}, skipping")
                 continue
             
-            # Calculate quantile-based bin edges for all 5 channels
+            if len(ema9_values) == 0 or len(ema21_values) == 0 or len(ema50_values) == 0 or len(ema_ratio_values) == 0:
+                logger.warning(f"  No valid EMA data for {coin}, skipping")
+                continue
+            
+            # Calculate quantile-based bin edges for all 9 channels
             price_bin_edges = np.percentile(price_returns, percentiles)
             volume_bin_edges = np.percentile(volume_changes, percentiles)
             rsi_bin_edges = np.percentile(rsi_values, percentiles)
             macd_bin_edges = np.percentile(macd_values, percentiles)
             bb_bin_edges = np.percentile(bb_values, percentiles)
+            ema9_bin_edges = np.percentile(ema9_values, percentiles)
+            ema21_bin_edges = np.percentile(ema21_values, percentiles)
+            ema50_bin_edges = np.percentile(ema50_values, percentiles)
+            ema_ratio_bin_edges = np.percentile(ema_ratio_values, percentiles)
             
             bin_edges[coin] = {
                 'price': price_bin_edges,
                 'volume': volume_bin_edges,
                 'rsi': rsi_bin_edges,
                 'macd': macd_bin_edges,
-                'bb_position': bb_bin_edges
+                'bb_position': bb_bin_edges,
+                'ema_9': ema9_bin_edges,
+                'ema_21': ema21_bin_edges,
+                'ema_50': ema50_bin_edges,
+                'ema_ratio': ema_ratio_bin_edges
             }
         
         return bin_edges
@@ -292,12 +334,16 @@ class TokenizeBlock(PipelineBlock):
         - Values above max bin edge → bin 255
         
         Args:
-            df: DataFrame with COIN_close, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position
+            df: DataFrame with COIN_close, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position,
+                COIN_ema_9, COIN_ema_21, COIN_ema_50, COIN_ema_ratio
             coins: List of coin symbols
-            bin_edges: Fitted bin edges {coin: {price: edges, volume: edges, rsi: edges, macd: edges, bb_position: edges}}
+            bin_edges: Fitted bin edges {coin: {price: edges, volume: edges, rsi: edges, macd: edges, 
+                                               bb_position: edges, ema_9: edges, ema_21: edges, 
+                                               ema_50: edges, ema_ratio: edges}}
             
         Returns:
-            DataFrame with columns: COIN_price, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position (token values 0-255)
+            DataFrame with columns: COIN_price, COIN_volume, COIN_rsi, COIN_macd, COIN_bb_position,
+                                   COIN_ema_9, COIN_ema_21, COIN_ema_50, COIN_ema_ratio (token values 0-255)
         """
         tokens_dict = {}
         
@@ -307,6 +353,10 @@ class TokenizeBlock(PipelineBlock):
             rsi_col = f"{coin}_rsi"
             macd_col = f"{coin}_macd"
             bb_col = f"{coin}_bb_position"
+            ema9_col = f"{coin}_ema_9"
+            ema21_col = f"{coin}_ema_21"
+            ema50_col = f"{coin}_ema_50"
+            ema_ratio_col = f"{coin}_ema_ratio"
             
             if close_col not in df.columns or volume_col not in df.columns:
                 logger.warning(f"  Missing price/volume columns for {coin}, skipping")
@@ -314,6 +364,10 @@ class TokenizeBlock(PipelineBlock):
             
             if rsi_col not in df.columns or macd_col not in df.columns or bb_col not in df.columns:
                 logger.warning(f"  Missing indicator columns for {coin}, skipping")
+                continue
+            
+            if ema9_col not in df.columns or ema21_col not in df.columns or ema50_col not in df.columns or ema_ratio_col not in df.columns:
+                logger.warning(f"  Missing EMA columns for {coin}, skipping")
                 continue
             
             if coin not in bin_edges:
@@ -347,8 +401,29 @@ class TokenizeBlock(PipelineBlock):
             bb_values = df[bb_col]
             bb_tokens = np.digitize(bb_values, bin_edges[coin]['bb_position'])
             tokens_dict[f"{coin}_bb_position"] = bb_tokens
+            
+            # EMA-9 CHANNEL
+            ema9_values = df[ema9_col]
+            ema9_tokens = np.digitize(ema9_values, bin_edges[coin]['ema_9'])
+            tokens_dict[f"{coin}_ema_9"] = ema9_tokens
+            
+            # EMA-21 CHANNEL
+            ema21_values = df[ema21_col]
+            ema21_tokens = np.digitize(ema21_values, bin_edges[coin]['ema_21'])
+            tokens_dict[f"{coin}_ema_21"] = ema21_tokens
+            
+            # EMA-50 CHANNEL
+            ema50_values = df[ema50_col]
+            ema50_tokens = np.digitize(ema50_values, bin_edges[coin]['ema_50'])
+            tokens_dict[f"{coin}_ema_50"] = ema50_tokens
+            
+            # EMA-RATIO CHANNEL
+            ema_ratio_values = df[ema_ratio_col]
+            ema_ratio_tokens = np.digitize(ema_ratio_values, bin_edges[coin]['ema_ratio'])
+            tokens_dict[f"{coin}_ema_ratio"] = ema_ratio_tokens
         
-        # Create DataFrame with column order: COIN1_price, COIN1_volume, COIN1_rsi, COIN1_macd, COIN1_bb_position, ...
+        # Create DataFrame with column order: COIN1_price, COIN1_volume, COIN1_rsi, COIN1_macd, COIN1_bb_position, 
+        #                                     COIN1_ema_9, COIN1_ema_21, COIN1_ema_50, COIN1_ema_ratio, ...
         ordered_cols = []
         for coin in coins:
             if f"{coin}_price" in tokens_dict:
@@ -357,6 +432,10 @@ class TokenizeBlock(PipelineBlock):
                 ordered_cols.append(f"{coin}_rsi")
                 ordered_cols.append(f"{coin}_macd")
                 ordered_cols.append(f"{coin}_bb_position")
+                ordered_cols.append(f"{coin}_ema_9")
+                ordered_cols.append(f"{coin}_ema_21")
+                ordered_cols.append(f"{coin}_ema_50")
+                ordered_cols.append(f"{coin}_ema_ratio")
         
         tokens_df = pd.DataFrame({col: tokens_dict[col] for col in ordered_cols}, index=df.index)
         

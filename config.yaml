@@ -4,21 +4,11 @@ artifacts_base_dir: artifacts
 # DATA CONFIGURATION
 # =============================================================================
 data:
-  # Cryptocurrency coins to collect data for
-  coins:
-  - BTC
-  - ETH
-  - LTC
-  - XRP
-  
-  target_coin: XRP  # Coin to predict (XRP is index 3)
-  interval: 1h      # Data interval
-  
-  # Date range for data collection
-  default_start_date: 2018-01-01
+  coins: [BTC, ETH, LTC, XRP, BNB, ADA, XLM, TRX, DOGE, DOT]  # Mix of high-volume and diverse crypto sectors
+  target_coin: XRP
+  interval: 1h
+  default_start_date: 2018-05-05  # XRP prices start varying from 2018-05-04
   default_end_date: 2025-10-25
-  
-  # Data directories
   data_dir: artifacts/step_01_download
   
   # Collection settings
@@ -35,138 +25,105 @@ data:
 # TRAIN/VALIDATION SPLIT CONFIGURATION
 # =============================================================================
 split:
-  train_ratio: 0.8    # 80% train, 20% validation
-  temporal: true      # Temporal split (no shuffling to prevent data leakage)
+  train_ratio: 0.8
+  temporal: true
 
 # =============================================================================
 # TOKENIZATION CONFIGURATION
 # =============================================================================
 tokenization:
-  vocab_size: 256  # 256-bin quantization for input features (0-255)
-  method: quantile  # Quantile-based binning for uniform distribution
-  
-  # 255 bin edges for 256 bins (percentiles from 0.4 to 99.6)
-  percentiles: [0.4, 0.8, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 3.6, 4.0, 4.4, 4.8, 5.2, 5.6, 6.0, 6.4, 6.8, 7.2, 7.6, 8.0, 8.4, 8.8, 9.2, 9.6, 10.0, 10.4, 10.8, 11.2, 11.6, 12.0, 12.4, 12.8, 13.2, 13.6, 14.0, 14.4, 14.8, 15.2, 15.6, 16.0, 16.4, 16.8, 17.2, 17.6, 18.0, 18.4, 18.8, 19.2, 19.6, 20.0, 20.4, 20.8, 21.2, 21.6, 22.0, 22.4, 22.8, 23.2, 23.6, 24.0, 24.4, 24.8, 25.2, 25.6, 26.0, 26.4, 26.8, 27.2, 27.6, 28.0, 28.4, 28.8, 29.2, 29.6, 30.0, 30.4, 30.8, 31.2, 31.6, 32.0, 32.4, 32.8, 33.2, 33.6, 34.0, 34.4, 34.8, 35.2, 35.6, 36.0, 36.4, 36.8, 37.2, 37.6, 38.0, 38.4, 38.8, 39.2, 39.6, 40.0, 40.4, 40.8, 41.2, 41.6, 42.0, 42.4, 42.8, 43.2, 43.6, 44.0, 44.4, 44.8, 45.2, 45.6, 46.0, 46.4, 46.8, 47.2, 47.6, 48.0, 48.4, 48.8, 49.2, 49.6, 50.0, 50.4, 50.8, 51.2, 51.6, 52.0, 52.4, 52.8, 53.2, 53.6, 54.0, 54.4, 54.8, 55.2, 55.6, 56.0, 56.4, 56.8, 57.2, 57.6, 58.0, 58.4, 58.8, 59.2, 59.6, 60.0, 60.4, 60.8, 61.2, 61.6, 62.0, 62.4, 62.8, 63.2, 63.6, 64.0, 64.4, 64.8, 65.2, 65.6, 66.0, 66.4, 66.8, 67.2, 67.6, 68.0, 68.4, 68.8, 69.2, 69.6, 70.0, 70.4, 70.8, 71.2, 71.6, 72.0, 72.4, 72.8, 73.2, 73.6, 74.0, 74.4, 74.8, 75.2, 75.6, 76.0, 76.4, 76.8, 77.2, 77.6, 78.0, 78.4, 78.8, 79.2, 79.6, 80.0, 80.4, 80.8, 81.2, 81.6, 82.0, 82.4, 82.8, 83.2, 83.6, 84.0, 84.4, 84.8, 85.2, 85.6, 86.0, 86.4, 86.8, 87.2, 87.6, 88.0, 88.4, 88.8, 89.2, 89.6, 90.0, 90.4, 90.8, 91.2, 91.6, 92.0, 92.4, 92.8, 93.2, 93.6, 94.0, 94.4, 94.8, 95.2, 95.6, 96.0, 96.4, 96.8, 97.2, 97.6, 98.0, 98.4, 98.8, 99.2, 99.6]
+  vocab_size: 256
+  method: quantile  # Percentiles will be auto-generated at runtime (0.4 to 99.6)
 
 # =============================================================================
 # SEQUENCE CONFIGURATION
 # =============================================================================
 sequences:
-  input_length: 48   # 48 hours (2 days) of historical context - increased for better trend detection
-  output_length: 1   # Predict 1 hour ahead (single-horizon BUY decision)
-  num_channels: 5    # 0=price, 1=volume, 2=rsi, 3=macd, 4=bb_position
-  prediction_horizon: 8  # How many hours ahead to predict for BUY signal (8h = less noise, more directional)
+  input_length: 48            # 48 hours (2 days) of historical context
+  output_length: 1            # Single prediction
+  num_channels: 9              # 9 channels: price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio
+  prediction_horizon: 1     # Predict 1 hour ahead
 
 # =============================================================================
-# MODEL ARCHITECTURE - CryptoTransformerV4
+# MODEL ARCHITECTURE
 # =============================================================================
 model:
-  type: CryptoTransformerV4  # Multi-horizon with BTC→XRP attention and time features
+  # Model configuration
+  vocab_size: 256
+  num_classes: 256            # 256-class token prediction
+  num_coins: 10
+  binary_classification: false
   
-  # Vocabulary and output configuration
-  vocab_size: 256      # 256-bin vocabulary for input features
-  num_classes: 3       # 3-class output (0=negative, 1=level, 2=positive)
-  num_coins: 4         # Number of coins in dataset (BTC, ETH, LTC, XRP)
-  target_coin_idx: 3   # XRP is at index 3 (must match data.target_coin)
-  btc_coin_idx: 0      # BTC is at index 0 for dedicated pathway
+  # Architecture (tuned via Optuna) - increased for 10 coins
+  d_model: 256
+  nhead: 8
+  num_encoder_layers: 3
+  num_decoder_layers: 2
+  dim_feedforward: 1024
+  dropout: 0.25
   
-  # Transformer architecture (increased for better multi-horizon learning)
-  d_model: 64                     # Tuned: was 208
-  nhead: 4                        # Tuned: was 4 (unchanged)
-  num_encoder_layers: 3           # Tuned: was 8
-  num_decoder_layers: 2           # Tuned: was 8
-  dim_feedforward: 512            # Tuned: was 768
-  dropout: 0.5                # Increased from 0.4 to match training config
+  # Embeddings and encoding
+  coin_embedding_dim: 16
+  positional_encoding: sinusoidal
+  max_seq_len: 1024
   
-  # Embeddings and positional encoding
-  coin_embedding_dim: 32     # Coin-specific embedding dimension
-  positional_encoding: sinusoidal   # 'learned' or 'sinusoidal' - learned better for multi-horizon
-  max_seq_len: 1024          # Max sequence length (48h × 4 coins × 5 channels = 960)
-  
-  # V4 Specific Features
-  multi_horizon_enabled: false  # Disable multi-horizon; use single 1h prediction
-  btc_attention_enabled: true  # Enable BTC→XRP dedicated attention pathway
-  time_features_enabled: true  # Enable cyclical time encoding (hour, day of week)
-  
-  # NEW: Binary classification for BUY signals
-  binary_classification: true  # Convert 256-class to 2-class (BUY/NO-BUY)
-  buy_token_threshold: 171     # Tokens 171-255 are "BUY" class
+  # V4 Features (simplified for 10-coin training)
+  multi_horizon_enabled: false
+  btc_attention_enabled: true
+  time_features_enabled: false  # Disable time features to reduce complexity
+
+  # Alternative: Use V1 model (simpler, more stable)
+  # type: CryptoTransformerV1
+
+  # For testing V1 vs V4:
+  # V1: Simpler, more stable, good baseline
+  # V4: Complex but potentially better with more data
 
 # =============================================================================
 # TRAINING CONFIGURATION
 # =============================================================================
 training:
   device: cuda
-  epochs: 200
-  batch_size: 128  # From tuning: 128
+  epochs: 50
+  batch_size: 128
   num_workers: 0
   
-  # Optimizer settings (tuned by Optuna - Trial 10)
-  learning_rate: 0.0010261451916475542  # Tuned: was 0.00015
-  weight_decay: 0.0006853552885259012   # Tuned: was 0.2
-  max_grad_norm: 1.4810708260893037     # Tuned: was 0.5
+  # Optimizer (optimized for better validation performance)
+  learning_rate: 0.0015  # Slightly higher for faster convergence
+  weight_decay: 0.0001   # Reduced to prevent over-regularization
+  max_grad_norm: 1.0     # Standard gradient clipping
   
-  # Regularization (tuned by Optuna)
-  dropout: 0.24920769223170258          # Tuned: was 0.5
-  label_smoothing: 0.011616568805333773 # Tuned: was 0.12
-  gaussian_noise: 0.08705283040432205   # Tuned: was 0.04
+  # Regularization (balanced for 9-channel model)
+  dropout: 0.2           # Reduced from 0.25 to prevent underfitting
+  label_smoothing: 0.01  # Slight smoothing for better generalization
+  gaussian_noise: 0.05   # Reduced noise to prevent information loss
   
-  # Learning rate scheduling
+  # Learning rate schedule
   scheduler: warmup_cosine
-  warmup_epochs: 3                       # Tuned: was 15
+  warmup_epochs: 3
   warmup_start_lr: 0.00001
-  min_lr_ratio: 0.00001
   
   # Early stopping
   early_stopping:
     enabled: true
-    patience: 15
+    patience: 30
     min_delta: 0.0001
-    monitor: val_accuracy
   
-  # Loss function configuration
-  loss_type: cross_entropy     # Loss type: 'cross_entropy', 'smooth_ordinal', 'ordinal', 'distance_weighted'
-  use_class_weights: true      # Enable automatic class weighting for imbalanced data
-  
-  # NEW: Binary classification loss parameters
-  binary_loss_type: bce_with_logits  # Use BCEWithLogitsLoss for binary classification
-  pos_weight: 2.0              # Moderate upweight of minority (BUY) class, reduced from 5.7
-  
-  # Alternative loss function parameters (used if loss_type is changed)
-  ordinal_sigma: 5.0           # For smooth_ordinal: Gaussian smoothing sigma
-  ordinal_margin: 0.5          # For ordinal: Soft margin for constraints
-  distance_alpha: 0.05         # For distance_weighted: Penalty per token distance
-  
-  # Multi-task learning weights (V3 only)
-  multitask:
-    enabled: true
-    w_cls: 1.0                 # Weight for classification loss
-    w_huber: 0.3               # Weight for regression (Huber) loss
-    w_quantile: 0.0            # Weight for quantile loss (disabled)
-  
-  # Logging
-  log_interval: 10             # Log every N batches
-  save_interval: 10            # Save checkpoint every N epochs
+  # Loss function
+  loss_type: distance_weighted  # 'cross_entropy', 'soft_ordinal', 'distance_weighted', or 'ordinal_regression'
+  ordinal_sigma: 5.0  # For soft_ordinal: controls spread (1=sharp, 10=wide)
+  distance_alpha: 0.05  # For distance_weighted: penalty factor (0.05 achieved best accuracy 0.30%)
+  use_class_weights: true
 
 # =============================================================================
 # INFERENCE CONFIGURATION
 # =============================================================================
 inference:
-  num_steps: 8                 # Number of autoregressive prediction steps
-  sampling: argmax             # Sampling strategy: 'argmax' or 'sample'
-  
-  # Single-horizon binary BUY decision
-  single_threshold: 0.95       # Probability threshold for BUY in single-horizon mode (very selective)
-  
-  # (Kept for compatibility if multi-horizon is re-enabled)
-  voting_strategy: weighted    # 'strict', 'majority', 'weighted', 'confidence_and'
-  voting_threshold: 0.70       # Confidence threshold for weighted/confidence_and strategies
-  min_horizons_agree: 3        # Minimum horizons that must agree for majority/confidence_and
-  horizon_weights:
-    horizon_1h: 1.0            # 1h prediction weight (most important)
-    horizon_2h: 0.8
-    horizon_4h: 0.6
-    horizon_8h: 0.4            # 8h prediction weight (least important)
+  # 3-class calibration for BUY and SELL signals
+  target_signal_rate: 0.02  # 2% target rate for BUY and SELL signals     # Target 5% signal rate for both BUY and SELL
+  calibration:
+    mode: precision_at_most_rate  # choose top-k <= rate to maximize precision
+    min_signals: 20               # avoid extremely tiny k that overfits noise
 
 # =============================================================================
 # LOGGING CONFIGURATION

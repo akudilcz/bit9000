@@ -126,12 +126,14 @@ class CryptoTransformerV4(nn.Module):
         target_coin_idx: int = 3,  # XRP
         btc_coin_idx: int = 0,  # BTC
         binary_classification: bool = False,  # NEW: Binary BUY/NO-BUY classification
+        num_channels: int = 9,  # NEW: Make channels configurable
     ):
         super().__init__()
         
         self.vocab_size = vocab_size
         self.num_classes = num_classes
         self.num_coins = num_coins
+        self.num_channels = num_channels
         self.d_model = d_model
         self.target_coin_idx = target_coin_idx
         self.btc_coin_idx = btc_coin_idx
@@ -141,12 +143,26 @@ class CryptoTransformerV4(nn.Module):
         # Coin-specific embeddings
         self.coin_embedding = nn.Embedding(num_coins, coin_embedding_dim)
         
-        # Token embeddings for price and volume (reused for all 5 channels)
-        self.price_embedding = nn.Embedding(vocab_size, d_model // 4)
-        self.volume_embedding = nn.Embedding(vocab_size, d_model // 4)
+        # Token embeddings for configurable channels (price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio)
+        # Use smaller embedding dimensions that sum to d_model when combined with coin embedding
+        # Ensure we don't lose information by using proper division
+        total_channel_dim = d_model - coin_embedding_dim
+        channel_embedding_dim = total_channel_dim // num_channels
+        remainder = total_channel_dim % num_channels
         
-        # Channel fusion: price + volume + indicator_avg + coin
-        fusion_dim = (d_model // 4) * 3 + coin_embedding_dim
+        # Distribute remainder across first few channels to avoid information loss
+        channel_dims = [channel_embedding_dim] * num_channels
+        for i in range(remainder):
+            channel_dims[i] += 1
+            
+        logger.info(f"Channel embedding dimensions: {channel_dims} (total: {sum(channel_dims)})")
+        
+        self.channel_embeddings = nn.ModuleList([
+            nn.Embedding(vocab_size, dim) for dim in channel_dims
+        ])
+        
+        # Channel fusion: concatenate all channel embeddings + coin embedding
+        fusion_dim = sum(channel_dims) + coin_embedding_dim
         self.channel_fusion = nn.Sequential(
             nn.Linear(fusion_dim, d_model),
             nn.LayerNorm(d_model),
@@ -230,7 +246,7 @@ class CryptoTransformerV4(nn.Module):
         logger.info(f"Initialized CryptoTransformerV4 with {param_count:,} parameters")
         logger.info(f"  Shared Encoder: {num_encoder_layers} layers, BTC Encoder: 2 layers, XRP Decoder: {num_decoder_layers} layers")
         logger.info(f"  d_model: {d_model}, nhead: {nhead}, dim_ff: {dim_feedforward}")
-        logger.info(f"  Multi-horizon: 1h, 2h, 4h, 8h prediction heads ({'binary BUY/NO-BUY' if binary_classification else f'{num_classes} classes'})")
+        logger.info(f"  Prediction head: single-horizon ({'binary BUY/NO-BUY' if binary_classification else f'{num_classes} classes'})")
         logger.info(f"  BTC→XRP dedicated attention pathway enabled")
         logger.info(f"  Time features: hour, day of week, sequence position")
     
@@ -290,20 +306,21 @@ class CryptoTransformerV4(nn.Module):
                 coin_indices = torch.zeros(B, L, dtype=torch.long, device=x.device)
         
         # Embed channels
-        price_emb = self.price_embedding(x_flat[:, :, 0])
-        volume_emb = self.volume_embedding(x_flat[:, :, 1])
+        # Handle configurable channels: price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio
+        embedded_channels = []
+        for i in range(Ch):  # Only iterate over actual channels present
+            if i < len(self.channel_embeddings):  # Safety check
+                channel_tokens = x_flat[:, :, i].long()  # Ensure long type for embedding
+                embedded_channels.append(self.channel_embeddings[i](channel_tokens))
+            else:
+                logger.warning(f"Input has {Ch} channels but model expects {len(self.channel_embeddings)} channels")
+                break
         
-        # Embed indicators if present (5 channels)
-        if Ch == 5:
-            rsi_emb = self.price_embedding(x_flat[:, :, 2])
-            macd_emb = self.volume_embedding(x_flat[:, :, 3])
-            bb_emb = self.price_embedding(x_flat[:, :, 4])
-            indicator_avg = (rsi_emb + macd_emb + bb_emb) / 3.0
-            combined = torch.cat([price_emb, volume_emb, indicator_avg, self.coin_embedding(coin_indices)], dim=-1)
-        else:
-            # 2 channels - pad with zeros
-            zero_pad = torch.zeros_like(price_emb)
-            combined = torch.cat([price_emb, volume_emb, zero_pad, self.coin_embedding(coin_indices)], dim=-1)
+        # Concatenate all channel embeddings
+        combined_channel_embeddings = torch.cat(embedded_channels, dim=-1)
+        
+        # Add coin embedding
+        combined = torch.cat([combined_channel_embeddings, self.coin_embedding(coin_indices)], dim=-1)
         
         embedded = self.channel_fusion(combined)
         
@@ -347,15 +364,15 @@ class CryptoTransformerV4(nn.Module):
         shared_memory = self.shared_encoder(encoder_input)  # (B, L*C, d_model)
         
         # 3. BTC-specific encoder
-        # Extract BTC features: every C-th element starting from btc_coin_idx
+        # Extract BTC features from encoded shared memory: every C-th element starting from btc_coin_idx
         btc_indices = torch.arange(self.btc_coin_idx, L * C, C, device=x.device)
-        btc_features = encoder_input[:, btc_indices, :]  # (B, L, d_model)
+        btc_features = shared_memory[:, btc_indices, :]  # (B, L, d_model)
         btc_memory = self.btc_encoder(btc_features)  # (B, L, d_model)
         
         # 4. XRP decoder: use last timestep of XRP as query
-        # Extract XRP features
+        # Extract XRP features from encoded shared memory
         xrp_indices = torch.arange(self.target_coin_idx, L * C, C, device=x.device)
-        xrp_features = encoder_input[:, xrp_indices, :]  # (B, L, d_model)
+        xrp_features = shared_memory[:, xrp_indices, :]  # (B, L, d_model)
         
         # Use last timestep as query for prediction
         xrp_query = xrp_features[:, -1:, :]  # (B, 1, d_model)

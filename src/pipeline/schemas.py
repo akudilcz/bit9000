@@ -75,8 +75,19 @@ class SplitDataArtifact(BaseModel):
     metadata: ArtifactMetadata
 
 
+class AugmentDataArtifact(BaseModel):
+    """Augmented data with technical indicators from step_04_augment"""
+    train_path: Path
+    val_path: Path
+    train_samples: int
+    val_samples: int
+    num_coins: int
+    indicators_added: List[str]  # ['rsi', 'macd', 'bb_position', 'ema_9', 'ema_21', 'ema_50', 'ema_ratio']
+    metadata: ArtifactMetadata
+
+
 class TokenizeArtifact(BaseModel):
-    """Tokenized data from tokenize block (Step 4)"""
+    """Tokenized data from tokenize block (Step 5)"""
     train_path: Path
     val_path: Path
     train_shape: Tuple[int, int]  # (timesteps, num_coins)
@@ -87,7 +98,7 @@ class TokenizeArtifact(BaseModel):
 
 
 class SequencesArtifact(BaseModel):
-    """Sequences (X, y) from sequence block (Step 5)"""
+    """Sequences (X, y) from sequence block (Step 6)"""
     train_X_path: Path
     train_y_path: Path
     val_X_path: Path
@@ -102,7 +113,7 @@ class SequencesArtifact(BaseModel):
 
 
 class TrainedModelArtifact(BaseModel):
-    """Trained model from train block (Step 6)"""
+    """Trained model from train block (Step 7)"""
     model_path: Path
     history_path: Path
     best_val_loss: float
@@ -112,7 +123,7 @@ class TrainedModelArtifact(BaseModel):
 
 
 class EvalReportArtifact(BaseModel):
-    """Evaluation report from evaluate block (Step 7)"""
+    """Evaluation report from evaluate block (Step 8)"""
     report_path: Path
     per_hour_accuracy: List[float]  # Accuracy for hours 1-8
     sequence_accuracy: float  # All 8 correct
@@ -122,7 +133,7 @@ class EvalReportArtifact(BaseModel):
 
 
 class InferenceArtifact(BaseModel):
-    """Inference results from inference block (Step 8)"""
+    """Inference results from inference block (Step 9)"""
     prediction_path: Path
     timestamp: datetime
     predictions: List[Dict[str, Any]]  # List of 8 hourly predictions

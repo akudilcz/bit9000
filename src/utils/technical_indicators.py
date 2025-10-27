@@ -35,6 +35,50 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return rsi
 
 
+def calculate_ema(series: pd.Series, period: int) -> pd.Series:
+    """
+    Calculate Exponential Moving Average (EMA)
+    
+    Args:
+        series: Price series
+        period: EMA period
+        
+    Returns:
+        EMA values
+    """
+    ema = series.ewm(span=period, adjust=False).mean()
+    ema = ema.fillna(series.mean())
+    return ema
+
+
+def calculate_ema_ratio(series: pd.Series, fast_period: int = 9, slow_period: int = 21) -> pd.Series:
+    """
+    Calculate ratio of fast EMA to slow EMA (momentum indicator)
+    Higher ratio = stronger uptrend, Lower ratio = stronger downtrend
+    
+    Args:
+        series: Price series
+        fast_period: Fast EMA period (default 9)
+        slow_period: Slow EMA period (default 21)
+        
+    Returns:
+        EMA ratio (fast / slow), normalized to 0-1 range
+    """
+    ema_fast = series.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = series.ewm(span=slow_period, adjust=False).mean()
+    
+    # Calculate ratio (fast / slow)
+    ratio = ema_fast / (ema_slow + 1e-8)
+    
+    # Normalize to approximately [0, 2] range where 1 = equal
+    # Then clip and scale to [0, 1]
+    ratio = ratio.clip(0.5, 1.5)  # 0.5x to 1.5x range
+    ratio_normalized = (ratio - 0.5) / 1.0  # Scale to [0, 1]
+    ratio_normalized = ratio_normalized.fillna(0.5)
+    
+    return ratio_normalized
+
+
 def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
     """
     Calculate MACD (Moving Average Convergence Divergence)
@@ -103,6 +147,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     
     Output format:
         - Original columns + {COIN}_rsi, {COIN}_macd, {COIN}_bb_position
+        - Plus: {COIN}_ema_9, {COIN}_ema_21, {COIN}_ema_50, {COIN}_ema_ratio
     
     Args:
         df: DataFrame with price/volume data
@@ -136,10 +181,18 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         # Bollinger Band position
         df[f"{coin}_bb_position"] = calculate_bollinger_position(df[close_col], period=20)
         
+        # EMAs - multiple periods for multi-timeframe analysis
+        df[f"{coin}_ema_9"] = calculate_ema(df[close_col], period=9)
+        df[f"{coin}_ema_21"] = calculate_ema(df[close_col], period=21)
+        df[f"{coin}_ema_50"] = calculate_ema(df[close_col], period=50)
+        
+        # EMA Ratio - fast/slow momentum indicator
+        df[f"{coin}_ema_ratio"] = calculate_ema_ratio(df[close_col], fast_period=9, slow_period=21)
+        
         logger.info(f"  Added indicators for {coin}")
     
     # Log statistics
-    indicator_cols = [c for c in df.columns if any(c.endswith(x) for x in ['_rsi', '_macd', '_bb_position'])]
+    indicator_cols = [c for c in df.columns if any(c.endswith(x) for x in ['_rsi', '_macd', '_bb_position', '_ema_9', '_ema_21', '_ema_50', '_ema_ratio'])]
     logger.info(f"Added {len(indicator_cols)} indicator columns")
     
     # Check for any remaining NaNs
@@ -191,6 +244,25 @@ def normalize_indicators_for_tokenization(df: pd.DataFrame) -> Tuple[pd.DataFram
         bb_col = f"{coin}_bb_position"
         if bb_col in df.columns:
             norm_params[bb_col] = {'type': 'none'}
+        
+        # EMAs: normalize relative to current price
+        # This helps the model learn price momentum relative to different timescales
+        close_col = f"{coin}_close"
+        for ema_period in [9, 21, 50]:
+            ema_col = f"{coin}_ema_{ema_period}"
+            if ema_col in df.columns and close_col in df.columns:
+                # Calculate ratio of EMA to current price
+                # Normalize to [0, 1] where 0.5 = equal, <0.5 = price above EMA, >0.5 = price below EMA
+                ratio = df[ema_col] / (df[close_col] + 1e-8)
+                ratio = ratio.clip(0.5, 1.5)  # 0.5x to 1.5x
+                ratio_normalized = (ratio - 0.5) / 1.0  # Scale to [0, 1]
+                df[ema_col] = ratio_normalized.fillna(0.5)
+                norm_params[ema_col] = {'type': 'ema_ratio', 'period': ema_period}
+        
+        # EMA Ratio: already normalized to [0, 1], no change needed
+        ema_ratio_col = f"{coin}_ema_ratio"
+        if ema_ratio_col in df.columns:
+            norm_params[ema_ratio_col] = {'type': 'none'}
     
     logger.info("Normalized indicators for tokenization")
     

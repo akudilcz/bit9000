@@ -9,8 +9,8 @@ import tempfile
 import shutil
 import json
 
-from src.pipeline.step_05_sequences.sequence_block import SequenceBlock
-from src.pipeline.step_04_tokenize.tokenize_block import TokenizeArtifact
+from src.pipeline.step_06_sequences.sequence_block import SequenceBlock
+from src.pipeline.step_05_tokenize.tokenize_block import TokenizeArtifact
 from src.pipeline.schemas import ArtifactMetadata
 from src.pipeline.io import ArtifactIO
 
@@ -58,6 +58,28 @@ def tokenized_data(temp_dir):
         # Volume tokens (0, 1, 2)
         train_data[f'{coin}_volume'] = np.random.choice([0, 1, 2], size=num_timesteps)
         val_data[f'{coin}_volume'] = np.random.choice([0, 1, 2], size=50)
+        
+        # Technical indicator tokens (0, 1, 2)
+        train_data[f'{coin}_rsi'] = np.random.choice([0, 1, 2], size=num_timesteps)
+        val_data[f'{coin}_rsi'] = np.random.choice([0, 1, 2], size=50)
+        
+        train_data[f'{coin}_macd'] = np.random.choice([0, 1, 2], size=num_timesteps)
+        val_data[f'{coin}_macd'] = np.random.choice([0, 1, 2], size=50)
+        
+        train_data[f'{coin}_bb_position'] = np.random.choice([0, 1, 2], size=num_timesteps)
+        val_data[f'{coin}_bb_position'] = np.random.choice([0, 1, 2], size=50)
+        
+        train_data[f'{coin}_ema_9'] = np.random.choice([0, 1, 2], size=num_timesteps)
+        val_data[f'{coin}_ema_9'] = np.random.choice([0, 1, 2], size=50)
+        
+        train_data[f'{coin}_ema_21'] = np.random.choice([0, 1, 2], size=num_timesteps)
+        val_data[f'{coin}_ema_21'] = np.random.choice([0, 1, 2], size=50)
+        
+        train_data[f'{coin}_ema_50'] = np.random.choice([0, 1, 2], size=num_timesteps)
+        val_data[f'{coin}_ema_50'] = np.random.choice([0, 1, 2], size=50)
+        
+        train_data[f'{coin}_ema_ratio'] = np.random.choice([0, 1, 2], size=num_timesteps)
+        val_data[f'{coin}_ema_ratio'] = np.random.choice([0, 1, 2], size=50)
     
     train_df = pd.DataFrame(train_data)
     val_df = pd.DataFrame(val_data)
@@ -68,11 +90,18 @@ def tokenized_data(temp_dir):
     train_df.to_parquet(train_path)
     val_df.to_parquet(val_path)
     
-    # Create dummy thresholds
+    # Create dummy thresholds for all 9 channels
     thresholds = {
         coin: {
             'price': [-0.01, 0.01],
-            'volume': [-0.1, 0.1]
+            'volume': [-0.1, 0.1],
+            'rsi': [30, 70],
+            'macd': [-0.1, 0.1],
+            'bb_position': [0.2, 0.8],
+            'ema_9': [-0.05, 0.05],
+            'ema_21': [-0.05, 0.05],
+            'ema_50': [-0.05, 0.05],
+            'ema_ratio': [0.9, 1.1]
         }
         for coin in coins
     }
@@ -84,15 +113,15 @@ def tokenized_data(temp_dir):
 
 
 def test_sequence_shape_is_correct(config, temp_dir, tokenized_data):
-    """Test that sequences have shape (N, 24, num_coins, 2)"""
+    """Test that sequences have shape (N, 24, num_coins, 9)"""
     train_path, val_path, thresholds_path = tokenized_data
     
     # Create tokenize artifact
     tokenize_artifact = TokenizeArtifact(
         train_path=train_path,
         val_path=val_path,
-        train_shape=(100, 6),  # 3 coins × 2 channels
-        val_shape=(50, 6),
+        train_shape=(100, 27),  # 3 coins × 9 channels
+        val_shape=(50, 27),
         thresholds_path=thresholds_path,
         token_distribution={0: {'train': 0.33, 'val': 0.30}},
         metadata=ArtifactMetadata(schema_name='tokenize')

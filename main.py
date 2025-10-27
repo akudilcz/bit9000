@@ -1,27 +1,22 @@
-#!/usr/bin/env python3
-"""Main entry point for cryptocurrency prediction pipeline"""
+"""Refactored main.py - thin CLI with orchestrated pipeline execution"""
 
 import click
 import yaml
 import sys
-import json
 from pathlib import Path
-from datetime import datetime
 
 from src.pipeline.io import ArtifactIO
+from src.pipeline.orchestrator import PipelineOrchestrator
 from src.pipeline.step_00_reset.reset_block import ResetBlock
 from src.pipeline.step_01_download.download_block import DownloadBlock
 from src.pipeline.step_02_clean.clean_block import CleanBlock
 from src.pipeline.step_03_split.split_block import EarlySplitBlock
-from src.pipeline.step_04_tokenize.tokenize_block import TokenizeBlock, TokenizeArtifact
-from src.pipeline.step_05_sequences.sequence_block import SequenceBlock, SequencesArtifact
-from src.pipeline.step_06_train.train_block import TrainBlock, TrainedModelArtifact
-from src.pipeline.step_07_evaluate.evaluate_block import EvaluateBlock
-from src.pipeline.step_08_inference.inference_block import InferenceBlock
-from src.pipeline.schemas import (
-    RawDataArtifact, CleanDataArtifact, SplitDataArtifact,
-    ArtifactMetadata
-)
+from src.pipeline.step_04_augment.augment_block import AugmentBlock
+from src.pipeline.step_05_tokenize.tokenize_block import TokenizeBlock
+from src.pipeline.step_06_sequences.sequence_block import SequenceBlock
+from src.pipeline.step_07_train.train_block import TrainBlock
+from src.pipeline.step_08_evaluate.evaluate_block import EvaluateBlock
+from src.pipeline.step_09_inference.inference_block import InferenceBlock
 from src.utils.config_validator import ConfigValidator
 import torch
 from src.system.tune import run_tuning
@@ -46,10 +41,11 @@ def get_artifact_io():
     return ArtifactIO(base_dir='artifacts')
 
 
-def load_json_artifact(path: str):
-    """Load JSON artifact from path"""
-    with open(path) as f:
-        return json.load(f)
+def get_orchestrator():
+    """Get pipeline orchestrator instance"""
+    config = load_config()
+    artifact_io = get_artifact_io()
+    return PipelineOrchestrator(config, artifact_io)
 
 
 @click.group()
@@ -68,10 +64,8 @@ def pipeline():
 def reset():
     """Reset: Clean artifacts directory"""
     click.echo("\n[STEP 00] RESET: Cleaning artifacts...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    block = ResetBlock(config, artifact_io)
-    block.run()
+    orchestrator = get_orchestrator()
+    orchestrator.run_step("Reset", ResetBlock)
     click.echo("[OK] Reset complete\n")
 
 
@@ -81,10 +75,8 @@ def reset():
 def download(start_date, end_date):
     """Download: Fetch raw OHLCV data"""
     click.echo("\n[STEP 01] DOWNLOAD: Fetching cryptocurrency data...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    block = DownloadBlock(config, artifact_io)
-    block.run(start_date=start_date, end_date=end_date)
+    orchestrator = get_orchestrator()
+    orchestrator.run_step("Download", DownloadBlock, start_date=start_date, end_date=end_date)
     click.echo("[OK] Download complete\n")
 
 
@@ -92,21 +84,9 @@ def download(start_date, end_date):
 def clean():
     """Clean: Data cleaning and quality checks"""
     click.echo("\n[STEP 02] CLEAN: Cleaning data...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    raw_data = load_json_artifact('artifacts/step_01_download/raw_data_artifact.json')
-    raw_artifact = RawDataArtifact(
-        path=Path(raw_data['path']),
-        start_date=datetime.fromisoformat(raw_data['start_date']),
-        end_date=datetime.fromisoformat(raw_data['end_date']),
-        num_timesteps=raw_data['num_timesteps'],
-        num_coins=raw_data['num_coins'],
-        columns=raw_data['columns'],
-        freq=raw_data['freq'],
-        metadata=ArtifactMetadata(**raw_data['metadata'])
-    )
-    block = CleanBlock(config, artifact_io)
-    block.run(raw_artifact)
+    orchestrator = get_orchestrator()
+    raw_artifact = orchestrator.load_raw_artifact('artifacts/step_01_download/raw_data_artifact.json')
+    orchestrator.run_step("Clean", CleanBlock, raw_artifact)
     click.echo("[OK] Clean complete\n")
 
 
@@ -114,67 +94,39 @@ def clean():
 def split():
     """Split: Temporal train/validation split"""
     click.echo("\n[STEP 03] SPLIT: Splitting data temporally...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    clean_data = load_json_artifact('artifacts/step_02_clean/clean_data_artifact.json')
-    clean_artifact = CleanDataArtifact(
-        path=Path(clean_data['path']),
-        start_date=datetime.fromisoformat(clean_data['start_date']),
-        end_date=datetime.fromisoformat(clean_data['end_date']),
-        num_timesteps=clean_data['num_timesteps'],
-        num_coins=clean_data['num_coins'],
-        quality_metrics=clean_data['quality_metrics'],
-        metadata=ArtifactMetadata(**clean_data['metadata'])
-    )
-    block = EarlySplitBlock(config, artifact_io)
-    block.run(clean_artifact)
+    orchestrator = get_orchestrator()
+    clean_artifact = orchestrator.load_clean_artifact('artifacts/step_02_clean/clean_data_artifact.json')
+    orchestrator.run_step("Split", EarlySplitBlock, clean_artifact)
     click.echo("[OK] Split complete\n")
+
+
+@pipeline.command()
+def augment():
+    """Augment: Add technical indicators to split data"""
+    click.echo("\n[STEP 04] AUGMENT: Adding technical indicators...")
+    orchestrator = get_orchestrator()
+    split_artifact = orchestrator.load_split_artifact('artifacts/step_03_split/split_artifact.json')
+    orchestrator.run_step("Augment", AugmentBlock, split_artifact)
+    click.echo("[OK] Augment complete\n")
 
 
 @pipeline.command()
 def tokenize():
     """Tokenize: Convert prices to token sequences"""
-    click.echo("\n[STEP 04] TOKENIZE: Converting prices to tokens...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    split_data = load_json_artifact('artifacts/step_03_split/split_artifact.json')
-    split_artifact = SplitDataArtifact(
-        train_path=Path(split_data['train_path']),
-        val_path=Path(split_data['val_path']),
-        train_samples=split_data['train_samples'],
-        val_samples=split_data['val_samples'],
-        train_start_date=datetime.fromisoformat(split_data['train_start_date']),
-        train_end_date=datetime.fromisoformat(split_data['train_end_date']),
-        val_start_date=datetime.fromisoformat(split_data['val_start_date']),
-        val_end_date=datetime.fromisoformat(split_data['val_end_date']),
-        metadata=ArtifactMetadata(**split_data['metadata'])
-    )
-    block = TokenizeBlock(config, artifact_io)
-    block.run(split_artifact)
+    click.echo("\n[STEP 05] TOKENIZE: Converting prices to tokens...")
+    orchestrator = get_orchestrator()
+    augment_artifact = orchestrator.load_augment_artifact('artifacts/step_04_augment/augment_artifact.json')
+    orchestrator.run_step("Tokenize", TokenizeBlock, augment_artifact)
     click.echo("[OK] Tokenize complete\n")
 
 
 @pipeline.command()
 def sequences():
     """Sequences: Create rolling windows for supervised learning"""
-    click.echo("\n[STEP 05] SEQUENCES: Creating rolling windows...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    
-    # Load tokenize artifact
-    tokenize_data = load_json_artifact('artifacts/step_04_tokenize/tokenize_artifact.json')
-    tokenize_artifact = TokenizeArtifact(
-        train_path=Path(tokenize_data['train_path']),
-        val_path=Path(tokenize_data['val_path']),
-        train_shape=tuple(tokenize_data['train_shape']),
-        val_shape=tuple(tokenize_data['val_shape']),
-        thresholds_path=Path(tokenize_data['thresholds_path']),
-        token_distribution={int(k): v for k, v in tokenize_data['token_distribution'].items()},
-        metadata=ArtifactMetadata(**tokenize_data['metadata'])
-    )
-    
-    block = SequenceBlock(config, artifact_io)
-    block.run(tokenize_artifact)
+    click.echo("\n[STEP 06] SEQUENCES: Creating rolling windows...")
+    orchestrator = get_orchestrator()
+    tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
+    orchestrator.run_step("Sequences", SequenceBlock, tokenize_artifact)
     click.echo("[OK] Sequences complete\n")
 
 
@@ -188,7 +140,8 @@ def tune(num_trials, epochs_per_trial, timeout_hours):
     config = load_config()
     
     # Load sequences
-    seq_data = load_json_artifact('artifacts/step_05_sequences/sequences_artifact.json')
+    orchestrator = get_orchestrator()
+    seq_data = orchestrator.load_json_artifact('artifacts/step_06_sequences/sequences_artifact.json')
     sequences_dir = Path(seq_data['train_X_path']).parent
     
     click.echo(f"Loading sequences from {sequences_dir}...")
@@ -201,137 +154,52 @@ def tune(num_trials, epochs_per_trial, timeout_hours):
     click.echo(f"  Val:   X={val_X.shape}, y={val_y.shape}")
     
     # Run tuning
-    output_dir = Path('artifacts/tuning')
-    timeout_hours_float = float(timeout_hours) if timeout_hours else None
-    
-    click.echo(f"\nStarting tuning with {num_trials} trials, {epochs_per_trial} epochs per trial...")
-    results = run_tuning(
+    best_params = run_tuning(
         config=config,
         train_X=train_X,
         train_y=train_y,
         val_X=val_X,
         val_y=val_y,
-        output_dir=output_dir,
         num_trials=num_trials,
         epochs_per_trial=epochs_per_trial,
-        timeout_hours=timeout_hours_float
+        timeout_hours=timeout_hours
     )
     
-    click.echo("\n" + "="*70)
-    click.echo("TUNING COMPLETE!")
-    click.echo("="*70)
-    click.echo(f"Best trial: {results['best_trial']}")
-    click.echo(f"Best validation loss: {results['best_val_loss']:.4f}")
-    click.echo(f"Completed trials: {results['num_completed_trials']}/{results['num_trials']}")
-    click.echo(f"Pruned trials: {results['num_pruned_trials']}")
-    click.echo(f"\nBest parameters:")
-    for param, value in results['best_params'].items():
-        click.echo(f"  {param}: {value}")
-    click.echo(f"\nResults saved to: {output_dir}")
-    click.echo("="*70 + "\n")
+    click.echo(f"\nBest parameters found:")
+    for key, value in best_params.items():
+        click.echo(f"  {key}: {value}")
+    click.echo("[OK] Tuning complete\n")
 
 
 @pipeline.command()
 def train():
     """Train: Train transformer model on sequences"""
-    click.echo("\n[STEP 06] TRAIN: Training model...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    
-    # Load sequences artifact
-    seq_data = load_json_artifact('artifacts/step_05_sequences/sequences_artifact.json')
-    sequences_artifact = SequencesArtifact(
-        train_X_path=Path(seq_data['train_X_path']),
-        train_y_path=Path(seq_data['train_y_path']),
-        val_X_path=Path(seq_data['val_X_path']),
-        val_y_path=Path(seq_data['val_y_path']),
-        train_num_samples=seq_data['train_num_samples'],
-        val_num_samples=seq_data['val_num_samples'],
-        input_length=seq_data['input_length'],
-        output_length=seq_data['output_length'],
-        num_coins=seq_data['num_coins'],
-        num_channels=seq_data.get('num_channels', 2),
-        target_coin=seq_data['target_coin'],
-        metadata=ArtifactMetadata(**seq_data['metadata'])
-    )
-    
-    block = TrainBlock(config, artifact_io)
-    block.run(sequences_artifact)
+    click.echo("\n[STEP 07] TRAIN: Training model...")
+    orchestrator = get_orchestrator()
+    sequences_artifact = orchestrator.load_sequences_artifact('artifacts/step_06_sequences/sequences_artifact.json')
+    orchestrator.run_step("Train", TrainBlock, sequences_artifact)
     click.echo("[OK] Train complete\n")
 
 
 @pipeline.command()
 def evaluate():
     """Evaluate: Validate model quality"""
-    click.echo("\n[STEP 07] EVALUATE: Validating model...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    
-    # Load train artifact
-    train_data = load_json_artifact('artifacts/step_06_train/train_artifact.json')
-    train_artifact = TrainedModelArtifact(
-        model_path=Path(train_data['model_path']),
-        history_path=Path(train_data['history_path']),
-        best_val_loss=train_data['best_val_loss'],
-        best_val_acc=train_data['best_val_acc'],
-        total_epochs=train_data['total_epochs'],
-        metadata=ArtifactMetadata(**train_data['metadata'])
-    )
-    
-    # Load sequences artifact
-    seq_data = load_json_artifact('artifacts/step_05_sequences/sequences_artifact.json')
-    sequences_artifact = SequencesArtifact(
-        train_X_path=Path(seq_data['train_X_path']),
-        train_y_path=Path(seq_data['train_y_path']),
-        val_X_path=Path(seq_data['val_X_path']),
-        val_y_path=Path(seq_data['val_y_path']),
-        train_num_samples=seq_data['train_num_samples'],
-        val_num_samples=seq_data['val_num_samples'],
-        input_length=seq_data['input_length'],
-        output_length=seq_data['output_length'],
-        num_coins=seq_data['num_coins'],
-        num_channels=seq_data.get('num_channels', 2),
-        target_coin=seq_data['target_coin'],
-        metadata=ArtifactMetadata(**seq_data['metadata'])
-    )
-    
-    block = EvaluateBlock(config, artifact_io)
-    block.run(train_artifact, sequences_artifact)
+    click.echo("\n[STEP 08] EVALUATE: Validating model...")
+    orchestrator = get_orchestrator()
+    train_artifact = orchestrator.load_trained_model_artifact('artifacts/step_07_train/train_artifact.json')
+    sequences_artifact = orchestrator.load_sequences_artifact('artifacts/step_06_sequences/sequences_artifact.json')
+    orchestrator.run_step("Evaluate", EvaluateBlock, train_artifact, sequences_artifact)
     click.echo("[OK] Evaluate complete\n")
 
 
 @pipeline.command()
 def inference():
     """Inference: Predict next 8 hours"""
-    click.echo("\n[STEP 08] INFERENCE: Predicting next 8 hours...")
-    config = load_config()
-    artifact_io = get_artifact_io()
-    
-    # Load train artifact
-    train_data = load_json_artifact('artifacts/step_06_train/train_artifact.json')
-    train_artifact = TrainedModelArtifact(
-        model_path=Path(train_data['model_path']),
-        history_path=Path(train_data['history_path']),
-        best_val_loss=train_data['best_val_loss'],
-        best_val_acc=train_data['best_val_acc'],
-        total_epochs=train_data['total_epochs'],
-        metadata=ArtifactMetadata(**train_data['metadata'])
-    )
-    
-    # Load tokenize artifact (for thresholds)
-    tokenize_data = load_json_artifact('artifacts/step_04_tokenize/tokenize_artifact.json')
-    tokenize_artifact = TokenizeArtifact(
-        train_path=Path(tokenize_data['train_path']),
-        val_path=Path(tokenize_data['val_path']),
-        train_shape=tuple(tokenize_data['train_shape']),
-        val_shape=tuple(tokenize_data['val_shape']),
-        thresholds_path=Path(tokenize_data['thresholds_path']),
-        token_distribution={int(k): v for k, v in tokenize_data['token_distribution'].items()},
-        metadata=ArtifactMetadata(**tokenize_data['metadata'])
-    )
-    
-    block = InferenceBlock(config, artifact_io)
-    block.run(train_artifact, tokenize_artifact)
+    click.echo("\n[STEP 09] INFERENCE: Predicting next 8 hours...")
+    orchestrator = get_orchestrator()
+    train_artifact = orchestrator.load_trained_model_artifact('artifacts/step_07_train/train_artifact.json')
+    tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
+    orchestrator.run_step("Inference", InferenceBlock, train_artifact, tokenize_artifact)
     click.echo("[OK] Inference complete\n")
 
 
@@ -345,100 +213,55 @@ def run_all(start_date, end_date):
     click.echo("="*70)
     
     try:
+        orchestrator = get_orchestrator()
+        
         # Step 00: Reset
         click.echo("\n[STEP 00] RESET...")
-        config = load_config()
-        artifact_io = get_artifact_io()
-        block = ResetBlock(config, artifact_io)
-        block.run()
+        orchestrator.run_step("Reset", ResetBlock)
         
         # Step 01: Download
         click.echo("\n[STEP 01] DOWNLOAD...")
-        block = DownloadBlock(config, artifact_io)
-        block.run(start_date=start_date, end_date=end_date)
+        orchestrator.run_step("Download", DownloadBlock, start_date=start_date, end_date=end_date)
         
         # Step 02: Clean
         click.echo("\n[STEP 02] CLEAN...")
-        raw_data = load_json_artifact('artifacts/step_01_download/raw_data_artifact.json')
-        raw_artifact = RawDataArtifact(
-            path=Path(raw_data['path']),
-            start_date=datetime.fromisoformat(raw_data['start_date']),
-            end_date=datetime.fromisoformat(raw_data['end_date']),
-            num_timesteps=raw_data['num_timesteps'],
-            num_coins=raw_data['num_coins'],
-            columns=raw_data['columns'],
-            freq=raw_data['freq'],
-            metadata=ArtifactMetadata(**raw_data['metadata'])
-        )
-        block = CleanBlock(config, artifact_io)
-        block.run(raw_artifact)
+        raw_artifact = orchestrator.load_raw_artifact('artifacts/step_01_download/raw_data_artifact.json')
+        orchestrator.run_step("Clean", CleanBlock, raw_artifact)
         
         # Step 03: Split
         click.echo("\n[STEP 03] SPLIT...")
-        clean_data = load_json_artifact('artifacts/step_02_clean/clean_data_artifact.json')
-        clean_artifact = CleanDataArtifact(
-            path=Path(clean_data['path']),
-            start_date=datetime.fromisoformat(clean_data['start_date']),
-            end_date=datetime.fromisoformat(clean_data['end_date']),
-            num_timesteps=clean_data['num_timesteps'],
-            num_coins=clean_data['num_coins'],
-            quality_metrics=clean_data['quality_metrics'],
-            metadata=ArtifactMetadata(**clean_data['metadata'])
-        )
-        block = EarlySplitBlock(config, artifact_io)
-        block.run(clean_artifact)
+        clean_artifact = orchestrator.load_clean_artifact('artifacts/step_02_clean/clean_data_artifact.json')
+        orchestrator.run_step("Split", EarlySplitBlock, clean_artifact)
         
-        # Step 04: Tokenize
-        click.echo("\n[STEP 04] TOKENIZE...")
-        split_data = load_json_artifact('artifacts/step_03_split/split_artifact.json')
-        split_artifact = SplitDataArtifact(
-            train_path=Path(split_data['train_path']),
-            val_path=Path(split_data['val_path']),
-            train_samples=split_data['train_samples'],
-            val_samples=split_data['val_samples'],
-            train_start_date=datetime.fromisoformat(split_data['train_start_date']),
-            train_end_date=datetime.fromisoformat(split_data['train_end_date']),
-            val_start_date=datetime.fromisoformat(split_data['val_start_date']),
-            val_end_date=datetime.fromisoformat(split_data['val_end_date']),
-            metadata=ArtifactMetadata(**split_data['metadata'])
-        )
-        block = TokenizeBlock(config, artifact_io)
-        block.run(split_artifact)
+        # Step 04: Augment
+        click.echo("\n[STEP 04] AUGMENT...")
+        split_artifact = orchestrator.load_split_artifact('artifacts/step_03_split/split_artifact.json')
+        orchestrator.run_step("Augment", AugmentBlock, split_artifact)
         
-        # Step 05: Sequences
-        click.echo("\n[STEP 05] SEQUENCES...")
-        tokenize_data = load_json_artifact('artifacts/step_04_tokenize/tokenize_artifact.json')
-        tokenize_artifact = TokenizeArtifact(
-            train_path=Path(tokenize_data['train_path']),
-            val_path=Path(tokenize_data['val_path']),
-            train_shape=tuple(tokenize_data['train_shape']),
-            val_shape=tuple(tokenize_data['val_shape']),
-            thresholds_path=Path(tokenize_data['thresholds_path']),
-            token_distribution={int(k): v for k, v in tokenize_data['token_distribution'].items()},
-            metadata=ArtifactMetadata(**tokenize_data['metadata'])
-        )
-        block = SequenceBlock(config, artifact_io)
-        block.run(tokenize_artifact)
+        # Step 05: Tokenize
+        click.echo("\n[STEP 05] TOKENIZE...")
+        augment_artifact = orchestrator.load_augment_artifact('artifacts/step_04_augment/augment_artifact.json')
+        orchestrator.run_step("Tokenize", TokenizeBlock, augment_artifact)
         
-        # Step 06: Train
-        click.echo("\n[STEP 06] TRAIN...")
-        seq_data = load_json_artifact('artifacts/step_05_sequences/sequences_artifact.json')
-        sequences_artifact = SequencesArtifact(
-            train_X_path=Path(seq_data['train_X_path']),
-            train_y_path=Path(seq_data['train_y_path']),
-            val_X_path=Path(seq_data['val_X_path']),
-            val_y_path=Path(seq_data['val_y_path']),
-            train_num_samples=seq_data['train_num_samples'],
-            val_num_samples=seq_data['val_num_samples'],
-            input_length=seq_data['input_length'],
-            output_length=seq_data['output_length'],
-            num_coins=seq_data['num_coins'],
-            num_channels=seq_data.get('num_channels', 2),
-            target_coin=seq_data['target_coin'],
-            metadata=ArtifactMetadata(**seq_data['metadata'])
-        )
-        block = TrainBlock(config, artifact_io)
-        block.run(sequences_artifact)
+        # Step 06: Sequences
+        click.echo("\n[STEP 06] SEQUENCES...")
+        tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
+        orchestrator.run_step("Sequences", SequenceBlock, tokenize_artifact)
+        
+        # Step 07: Train
+        click.echo("\n[STEP 07] TRAIN...")
+        sequences_artifact = orchestrator.load_sequences_artifact('artifacts/step_06_sequences/sequences_artifact.json')
+        orchestrator.run_step("Train", TrainBlock, sequences_artifact)
+        
+        # Step 08: Evaluate
+        click.echo("\n[STEP 08] EVALUATE...")
+        train_artifact = orchestrator.load_trained_model_artifact('artifacts/step_07_train/train_artifact.json')
+        orchestrator.run_step("Evaluate", EvaluateBlock, train_artifact, sequences_artifact)
+        
+        # Step 09: Inference
+        click.echo("\n[STEP 09] INFERENCE...")
+        tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
+        orchestrator.run_step("Inference", InferenceBlock, train_artifact, tokenize_artifact)
         
         click.echo("\n" + "="*70)
         click.echo("PIPELINE COMPLETE - ALL STEPS SUCCESSFUL")
@@ -460,91 +283,47 @@ def run_from_clean():
     click.echo("="*70)
     
     try:
-        config = load_config()
-        artifact_io = get_artifact_io()
+        orchestrator = get_orchestrator()
         
         # Step 02: Clean
         click.echo("\n[STEP 02] CLEAN...")
-        raw_data = load_json_artifact('artifacts/step_01_download/raw_data_artifact.json')
-        raw_artifact = RawDataArtifact(
-            path=Path(raw_data['path']),
-            start_date=datetime.fromisoformat(raw_data['start_date']),
-            end_date=datetime.fromisoformat(raw_data['end_date']),
-            num_timesteps=raw_data['num_timesteps'],
-            num_coins=raw_data['num_coins'],
-            columns=raw_data['columns'],
-            freq=raw_data['freq'],
-            metadata=ArtifactMetadata(**raw_data['metadata'])
-        )
-        block = CleanBlock(config, artifact_io)
-        block.run(raw_artifact)
+        raw_artifact = orchestrator.load_raw_artifact('artifacts/step_01_download/raw_data_artifact.json')
+        orchestrator.run_step("Clean", CleanBlock, raw_artifact)
         
         # Step 03: Split
         click.echo("\n[STEP 03] SPLIT...")
-        clean_data = load_json_artifact('artifacts/step_02_clean/clean_data_artifact.json')
-        clean_artifact = CleanDataArtifact(
-            path=Path(clean_data['path']),
-            start_date=datetime.fromisoformat(clean_data['start_date']),
-            end_date=datetime.fromisoformat(clean_data['end_date']),
-            num_timesteps=clean_data['num_timesteps'],
-            num_coins=clean_data['num_coins'],
-            quality_metrics=clean_data['quality_metrics'],
-            metadata=ArtifactMetadata(**clean_data['metadata'])
-        )
-        block = EarlySplitBlock(config, artifact_io)
-        block.run(clean_artifact)
+        clean_artifact = orchestrator.load_clean_artifact('artifacts/step_02_clean/clean_data_artifact.json')
+        orchestrator.run_step("Split", EarlySplitBlock, clean_artifact)
         
-        # Step 04: Tokenize
-        click.echo("\n[STEP 04] TOKENIZE...")
-        split_data = load_json_artifact('artifacts/step_03_split/split_artifact.json')
-        split_artifact = SplitDataArtifact(
-            train_path=Path(split_data['train_path']),
-            val_path=Path(split_data['val_path']),
-            train_samples=split_data['train_samples'],
-            val_samples=split_data['val_samples'],
-            train_start_date=datetime.fromisoformat(split_data['train_start_date']),
-            train_end_date=datetime.fromisoformat(split_data['train_end_date']),
-            val_start_date=datetime.fromisoformat(split_data['val_start_date']),
-            val_end_date=datetime.fromisoformat(split_data['val_end_date']),
-            metadata=ArtifactMetadata(**split_data['metadata'])
-        )
-        block = TokenizeBlock(config, artifact_io)
-        block.run(split_artifact)
+        # Step 04: Augment
+        click.echo("\n[STEP 04] AUGMENT...")
+        split_artifact = orchestrator.load_split_artifact('artifacts/step_03_split/split_artifact.json')
+        orchestrator.run_step("Augment", AugmentBlock, split_artifact)
         
-        # Step 05: Sequences
-        click.echo("\n[STEP 05] SEQUENCES...")
-        tokenize_data = load_json_artifact('artifacts/step_04_tokenize/tokenize_artifact.json')
-        tokenize_artifact = TokenizeArtifact(
-            train_path=Path(tokenize_data['train_path']),
-            val_path=Path(tokenize_data['val_path']),
-            train_shape=tuple(tokenize_data['train_shape']),
-            val_shape=tuple(tokenize_data['val_shape']),
-            thresholds_path=Path(tokenize_data['thresholds_path']),
-            token_distribution={int(k): v for k, v in tokenize_data['token_distribution'].items()},
-            metadata=ArtifactMetadata(**tokenize_data['metadata'])
-        )
-        block = SequenceBlock(config, artifact_io)
-        block.run(tokenize_artifact)
+        # Step 05: Tokenize
+        click.echo("\n[STEP 05] TOKENIZE...")
+        augment_artifact = orchestrator.load_augment_artifact('artifacts/step_04_augment/augment_artifact.json')
+        orchestrator.run_step("Tokenize", TokenizeBlock, augment_artifact)
         
-        # Step 06: Train
-        click.echo("\n[STEP 06] TRAIN...")
-        seq_data = load_json_artifact('artifacts/step_05_sequences/sequences_artifact.json')
-        sequences_artifact = SequencesArtifact(
-            train_X_path=Path(seq_data['train_X_path']),
-            train_y_path=Path(seq_data['train_y_path']),
-            val_X_path=Path(seq_data['val_X_path']),
-            val_y_path=Path(seq_data['val_y_path']),
-            train_num_samples=seq_data['train_num_samples'],
-            val_num_samples=seq_data['val_num_samples'],
-            input_length=seq_data['input_length'],
-            output_length=seq_data['output_length'],
-            num_coins=seq_data['num_coins'],
-            num_channels=seq_data.get('num_channels', 2),
-            target_coin=seq_data['target_coin'],
-            metadata=ArtifactMetadata(**seq_data['metadata'])
-        )
-        block = TrainBlock(config, artifact_io)
-        block.run(sequences_artifact)
+        # Step 06: Sequences
+        click.echo("\n[STEP 06] SEQUENCES...")
+        tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
+        orchestrator.run_step("Sequences", SequenceBlock, tokenize_artifact)
+        
+        # Step 07: Train
+        click.echo("\n[STEP 07] TRAIN...")
+        sequences_artifact = orchestrator.load_sequences_artifact('artifacts/step_06_sequences/sequences_artifact.json')
+        orchestrator.run_step("Train", TrainBlock, sequences_artifact)
+        
+        # Step 08: Evaluate
+        click.echo("\n[STEP 08] EVALUATE...")
+        train_artifact = orchestrator.load_trained_model_artifact('artifacts/step_07_train/train_artifact.json')
+        orchestrator.run_step("Evaluate", EvaluateBlock, train_artifact, sequences_artifact)
+        
+        # Step 09: Inference
+        click.echo("\n[STEP 09] INFERENCE...")
+        tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
+        orchestrator.run_step("Inference", InferenceBlock, train_artifact, tokenize_artifact)
         
         click.echo("\n" + "="*70)
         click.echo("PIPELINE COMPLETE - ALL STEPS SUCCESSFUL")

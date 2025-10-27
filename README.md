@@ -8,7 +8,7 @@ A lightweight transformer model that predicts XRP price direction 8 hours ahead 
 - ✅ **Architecture**: CryptoTransformerV4 (8-layer encoder, 8-layer XRP decoder, 4 heads, d_model=208)
 - ✅ **Binary Classification**: Directional prediction (BUY = price up, NO-BUY = flat/down)
 - ✅ **Prediction Horizon**: 8 hours ahead (less noise, more directional)
-- ✅ **Input Context**: 48 hours × 4 coins (BTC, ETH, LTC, XRP) × 5 channels (price, volume, RSI, MACD, BB position)
+- ✅ **Input Context**: 48 hours × 10 coins (BTC, ETH, LTC, XRP, BNB, ADA, XLM, TRX, DOGE, DOT) × 9 channels (price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio)
 - ✅ **Calibration**: Post-training threshold calibration achieving ~5% BUY signal rate
 - ✅ **Target Performance**: BUY precision >65% (when we say BUY, we're right >65% of the time)
 - ✅ **Regularization**: Aggressive (dropout=0.5, weight_decay=0.2, warmup=15 epochs, label_smoothing=0.12)
@@ -31,6 +31,7 @@ python main.py pipeline reset       # Clean artifacts
 python main.py pipeline download    # Fetch OHLCV data
 python main.py pipeline clean       # Clean and validate
 python main.py pipeline split       # Train/val split
+python main.py pipeline augment     # Add technical indicators
 python main.py pipeline tokenize    # Convert prices → 256-bin tokens
 python main.py pipeline sequences   # Create input/output windows
 python main.py pipeline train       # Train transformer
@@ -50,35 +51,36 @@ python main.py pipeline tune --num-trials 40 --epochs-per-trial 20
 ### 4. Check Results
 ```bash
 # Training metrics
-cat artifacts/step_06_train/history.json
+cat artifacts/step_07_train/history.json
 
 # Evaluation metrics
-cat artifacts/step_07_evaluate/eval_results.json
+cat artifacts/step_08_evaluate/eval_results.json
 
 # Latest predictions
-cat artifacts/step_08_inference/predictions_*.json
+cat artifacts/step_09_inference/predictions_*.json
 ```
 
 ## Pipeline Overview
 
-The model uses a 9-step pipeline optimized for directional BUY/NO-BUY signal prediction:
+The model uses a 10-step pipeline optimized for directional BUY/NO-BUY signal prediction:
 
 1. **Reset**: Clear previous artifacts
-2. **Download**: Fetch hourly OHLCV data (4 coins: BTC, ETH, LTC, XRP; 2018-2025)
-3. **Clean**: Fill gaps, add technical indicators (RSI, MACD, Bollinger Bands)
+2. **Download**: Fetch hourly OHLCV data (10 coins: BTC, ETH, LTC, XRP, BNB, ADA, XLM, TRX, DOGE, DOT; 2018-2025) + trim to common date range
+3. **Clean**: Fill gaps, validate data quality
 4. **Split**: Temporal train/val split (80/20, no shuffling to prevent leakage)
-5. **Tokenize**: Convert 5 channels to 256-bin tokens (quantile-based, uniform distribution)
-6. **Sequences**: Create rolling windows (48h input × 4 coins × 5 channels → 8h ahead directional target)
-7. **Train**: Train transformer with binary classification (BUY if future_price > current_price)
-8. **Evaluate**: Compute BUY precision and signal rate via post-training calibration
-9. **Inference**: Real-time directional predictions with calibrated threshold (~5% signal rate)
+5. **Augment**: Add technical indicators (RSI, MACD, Bollinger Bands, EMAs)
+6. **Tokenize**: Convert 9 channels to 256-bin tokens (quantile-based, uniform distribution)
+7. **Sequences**: Create rolling windows (48h input × 10 coins × 9 channels → 8h ahead directional target)
+8. **Train**: Train transformer with binary classification (BUY if future_price > current_price)
+9. **Evaluate**: Compute BUY precision and signal rate via post-training calibration
+10. **Inference**: Real-time directional predictions with calibrated threshold (~5% signal rate)
 
 ## Architecture
 
 **CryptoTransformerV4** - Encoder-decoder transformer with dedicated pathways and binary classification:
 - **Encoder**: Shared multi-coin context processor (8 layers, 4 heads)
-  - Processes all 4 coins (BTC, ETH, LTC, XRP) jointly
-  - Input: 48h × 4 coins × 5 channels (price, volume, RSI, MACD, BB_position)
+  - Processes all 10 coins (BTC, ETH, LTC, XRP, BNB, ADA, XLM, TRX, DOGE, DOT) jointly
+  - Input: 48h × 10 coins × 9 channels (price, volume, RSI, MACD, BB_position, EMA-9, EMA-21, EMA-50, EMA-ratio)
   - Output: Rich contextualized representations
   
 - **Decoders**: 
@@ -141,14 +143,15 @@ The model uses a 9-step pipeline optimized for directional BUY/NO-BUY signal pre
 
 Pipeline outputs are saved to `artifacts/`:
 - `step_00_reset/`: Artifact metadata from reset
-- `step_01_download/`: Raw OHLCV data (parquet files + visualizations)
+- `step_01_download/`: Raw OHLCV data (parquet files + visualizations) + trimmed to common date range
 - `step_02_clean/`: Cleaned OHLCV data (gaps filled, quality metrics)
 - `step_03_split/`: Train/validation split data (temporal split at 80/20)
-- `step_04_tokenize/`: Tokenized sequences + fitted 256-bin thresholds
-- `step_05_sequences/`: PyTorch tensor sequences (train_X.pt, train_y.pt, val_X.pt, val_y.pt)
-- `step_06_train/`: Trained model checkpoint + training history and loss curves
-- `step_07_evaluate/`: Evaluation metrics, accuracy plots, confusion matrices
-- `step_08_inference/`: Latest predictions with probabilities and confidence scores
+- `step_04_augment/`: Augmented data with technical indicators (RSI, MACD, BB, EMAs)
+- `step_05_tokenize/`: Tokenized sequences + fitted 256-bin thresholds
+- `step_06_sequences/`: PyTorch tensor sequences (train_X.pt, train_y.pt, val_X.pt, val_y.pt)
+- `step_07_train/`: Trained model checkpoint + training history and loss curves
+- `step_08_evaluate/`: Evaluation metrics, accuracy plots, confusion matrices
+- `step_09_inference/`: Latest predictions with probabilities and confidence scores
 - `tuning/`: Hyperparameter tuning results and visualizations
 
 ## Development
@@ -175,14 +178,15 @@ bit9000/
 │   │   ├── schemas.py               # Data schemas (Pydantic)
 │   │   │
 │   │   ├── step_00_reset/           # Clear artifacts
-│   │   ├── step_01_download/        # Fetch OHLCV data
+│   │   ├── step_01_download/        # Fetch OHLCV data + trim to common dates
 │   │   ├── step_02_clean/           # Data cleaning
 │   │   ├── step_03_split/           # Train/val split
-│   │   ├── step_04_tokenize/        # Price → tokens
-│   │   ├── step_05_sequences/       # Create rolling windows
-│   │   ├── step_06_train/           # Model training
-│   │   ├── step_07_evaluate/        # Validation & metrics
-│   │   └── step_08_inference/       # Real-time prediction
+│   │   ├── step_04_augment/         # Add technical indicators
+│   │   ├── step_05_tokenize/        # Price → tokens
+│   │   ├── step_06_sequences/       # Create rolling windows
+│   │   ├── step_07_train/           # Model training
+│   │   ├── step_08_evaluate/        # Validation & metrics
+│   │   └── step_09_inference/       # Real-time prediction
 │   │
 │   ├── system/
 │   │   ├── pretrain.py              # Pretraining utilities
@@ -203,7 +207,7 @@ bit9000/
 │   └── data/                        # Test fixtures
 │
 └── artifacts/                       # Pipeline outputs (gitignored)
-    ├── step_00_reset/ through step_08_inference/
+    ├── step_00_reset/ through step_09_inference/
     ├── checkpoints/                 # Model checkpoints
     └── lightning_logs/              # Training logs
 ```

@@ -533,7 +533,7 @@ class SimpleTrainer:
         
         Args:
             splits: List of data splits
-            output_dir: Directory to save checkpoints and logs (default: artifacts/step_06_train)
+            output_dir: Directory to save checkpoints and logs (default: artifacts/step_07_train)
         """
         
         if len(splits) != 1:
@@ -669,7 +669,7 @@ class SimpleTrainer:
         
         # Set up output directory for checkpoints and logs
         if output_dir is None:
-            output_dir = "artifacts/step_06_train"
+            output_dir = "artifacts/step_07_train"
         import os
         os.makedirs(output_dir, exist_ok=True)
         
