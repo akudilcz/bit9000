@@ -17,17 +17,22 @@ class EarlySplitBlock(PipelineBlock):
     All statistics, features, and transformations will be fit on training data only.
     """
     
-    def run(self, clean_artifact: CleanDataArtifact) -> SplitDataArtifact:
+    def run(self, clean_artifact: CleanDataArtifact = None) -> SplitDataArtifact:
         """
         Split cleaned data temporally into train and validation sets
         
         Args:
-            clean_artifact: CleanDataArtifact from clean block
+            clean_artifact: CleanDataArtifact from clean block (optional, will load from disk if not provided)
             
         Returns:
             SplitDataArtifact with paths to train and val parquet files
         """
         logger.info("Running early train/val split block")
+        
+        # Load clean artifact if not provided
+        if clean_artifact is None:
+            clean_artifact_data = self.artifact_io.read_json('artifacts/step_02_clean/clean_data_artifact.json')
+            clean_artifact = CleanDataArtifact(**clean_artifact_data)
         
         # Load cleaned data
         df = self.artifact_io.read_dataframe(clean_artifact.path)
@@ -74,10 +79,10 @@ class EarlySplitBlock(PipelineBlock):
             val_path=val_path,
             train_samples=len(train_df),
             val_samples=len(val_df),
-            train_start_date=train_df['timestamp'].iloc[0],
-            train_end_date=train_df['timestamp'].iloc[-1],
-            val_start_date=val_df['timestamp'].iloc[0],
-            val_end_date=val_df['timestamp'].iloc[-1],
+            train_start_date=train_df.index[0],
+            train_end_date=train_df.index[-1],
+            val_start_date=val_df.index[0],
+            val_end_date=val_df.index[-1],
             metadata=self.create_metadata(
                 upstream_inputs={"clean_data": str(clean_artifact.path)}
             )

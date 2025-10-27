@@ -14,17 +14,22 @@ logger = get_logger(__name__)
 class CleanBlock(PipelineBlock):
     """Clean and validate data quality"""
     
-    def run(self, raw_artifact: RawDataArtifact) -> CleanDataArtifact:
+    def run(self, raw_artifact: RawDataArtifact = None) -> CleanDataArtifact:
         """
         Clean raw data
         
         Args:
-            raw_artifact: RawDataArtifact from download block
+            raw_artifact: RawDataArtifact from download block (optional, will load from disk if not provided)
             
         Returns:
             CleanDataArtifact
         """
         logger.info("Running clean block")
+        
+        # Load raw artifact if not provided
+        if raw_artifact is None:
+            raw_artifact_data = self.artifact_io.read_json('artifacts/step_01_download/raw_data_artifact.json')
+            raw_artifact = RawDataArtifact(**raw_artifact_data)
         
         # Load raw data
         df = self.artifact_io.read_dataframe(raw_artifact.path)

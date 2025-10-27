@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Tuple
 
 from src.pipeline.base import PipelineBlock
-from src.pipeline.schemas import ArtifactMetadata
+from src.pipeline.schemas import ArtifactMetadata, TokenizeArtifact
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -59,7 +59,7 @@ class SequencesArtifact:
 class SequenceBlock(PipelineBlock):
     """Create rolling window sequences for supervised learning"""
     
-    def run(self, tokenize_artifact):
+    def run(self, tokenize_artifact: TokenizeArtifact = None):
         """
         Create sequences from tokenized data
         
@@ -71,7 +71,7 @@ class SequenceBlock(PipelineBlock):
         3. Save as PyTorch tensors
         
         Args:
-            tokenize_artifact: TokenizeArtifact from step_05_tokenize
+            tokenize_artifact: TokenizeArtifact from step_05_tokenize (optional, will load from disk if not provided)
             
         Returns:
             SequencesArtifact
@@ -79,6 +79,11 @@ class SequenceBlock(PipelineBlock):
         logger.info("="*70)
         logger.info("STEP 5: SEQUENCES - Creating rolling windows")
         logger.info("="*70)
+        
+        # Load tokenize artifact if not provided
+        if tokenize_artifact is None:
+            tokenize_artifact_data = self.artifact_io.read_json('artifacts/step_05_tokenize/tokenize_artifact.json')
+            tokenize_artifact = TokenizeArtifact(**tokenize_artifact_data)
         
         # Get config parameters
         input_length = self.config['sequences']['input_length']  # 24 hours

@@ -51,7 +51,6 @@ model:
   vocab_size: 256
   num_classes: 256
   num_coins: 10
-  binary_classification: false
   
   # Architecture
   d_model: 256
@@ -105,22 +104,16 @@ training:
   walk_forward:
     val_split_hours: 4320  # 6 months for validation
   
-  # Loss function (precision-focused)
-  loss_type: asymmetric
-  buy_penalty: 10.0
-  no_buy_penalty: 1.0
-  use_class_weights: true
+  # Loss function
+  # Using standard CrossEntropyLoss for 256-class token prediction
+  label_smoothing: 0.01
 
 # =============================================================================
 # INFERENCE CONFIGURATION
 # =============================================================================
 inference:
-  target_signal_rate: 0.01
-  calibration:
-    mode: precision_at_most_rate
-    min_signals: 10
-    confidence_threshold: 0.8
-    precision_target: 0.75
+  # Token prediction only - no threshold calibration needed
+  pass
 
 # =============================================================================
 # LOGGING CONFIGURATION

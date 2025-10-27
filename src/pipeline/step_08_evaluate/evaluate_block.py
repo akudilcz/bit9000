@@ -17,7 +17,8 @@ from typing import Dict, Tuple
 import json
 
 from src.pipeline.base import PipelineBlock
-from src.pipeline.schemas import ArtifactMetadata
+from src.pipeline.schemas import ArtifactMetadata, SequencesArtifact
+from src.pipeline.schemas import TrainedModelArtifact
 from src.model import create_model
 from src.utils.logger import get_logger
 
@@ -135,10 +136,10 @@ class EvaluateBlock(PipelineBlock):
         self._plot_per_hour_accuracy(per_hour_acc, block_dir / "per_hour_accuracy.png")
         logger.info(f"  Saved per-hour accuracy plot")
         
-        # Save XRP price chart with buy and sell signals
-        self._plot_xrp_with_trading_signals(model, val_X, val_y, sequences_artifact, device, block_dir, 
-                                             calibrated_threshold_buy, calibrated_threshold_sell)
-        logger.info(f"  Saved XRP price chart with trading signals")
+        # Save XRP price chart with buy and sell signals (deprecated - using token prediction)
+        # self._plot_xrp_with_trading_signals(model, val_X, val_y, sequences_artifact, device, block_dir, 
+        #                                      calibrated_threshold_buy, calibrated_threshold_sell)
+        # logger.info(f"  Saved XRP price chart with trading signals")
         
         # Save results JSON
         results = {
@@ -270,7 +271,8 @@ class EvaluateBlock(PipelineBlock):
         
         hours = list(range(1, len(per_hour_acc) + 1))
         ax.plot(hours, per_hour_acc, marker='o', linewidth=2, markersize=8)
-        ax.axhline(y=0.5, color='r', linestyle='--', label='Random baseline (50%)')
+        random_baseline = 1.0 / 256  # 256 classes
+        ax.axhline(y=random_baseline, color='r', linestyle='--', label=f'Random baseline ({random_baseline*100:.2f}%)')
         
         ax.set_xlabel('Prediction Hour', fontsize=12)
         ax.set_ylabel('Accuracy', fontsize=12)

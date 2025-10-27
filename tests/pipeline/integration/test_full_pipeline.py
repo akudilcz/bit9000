@@ -95,13 +95,13 @@ def sample_raw_data():
 def test_full_pipeline_integration(config, temp_dir, sample_raw_data):
     """Test the complete pipeline flow from reset to inference"""
     # Mock the data collector to return our sample data
-    with patch('src.pipeline.step_01_download.data_collector.CryptoDataCollector') as mock_collector_class:
+    with patch('src.pipeline.step_01_download.data_collector.DataCollector') as mock_collector:
         mock_collector = Mock()
-        mock_collector_class.return_value = mock_collector
+        mock_collector.return_value = mock_collector
         mock_collector.collect_all_data.return_value = sample_raw_data
         
         # Mock the trainer to avoid actual training
-        with patch('src.pipeline.step_07_train.train_block.Trainer') as mock_trainer_class:
+        with patch('torch.load') as mock_trainer_class:
             mock_trainer = Mock()
             mock_trainer_class.return_value = mock_trainer
             
@@ -176,7 +176,7 @@ def test_pipeline_from_clean_integration(config, temp_dir, sample_raw_data):
     sample_raw_data.to_parquet(clean_data_path)
     
     # Mock the trainer
-    with patch('src.pipeline.step_07_train.train_block.Trainer') as mock_trainer_class:
+    with patch('torch.load') as mock_trainer_class:
         mock_trainer = Mock()
         mock_trainer_class.return_value = mock_trainer
         
@@ -222,9 +222,9 @@ def test_pipeline_error_handling(config, temp_dir):
     orchestrator = PipelineOrchestrator(config, artifact_io)
     
     # Mock download to raise an error
-    with patch('src.pipeline.step_01_download.data_collector.CryptoDataCollector') as mock_collector_class:
+    with patch('src.pipeline.step_01_download.data_collector.DataCollector') as mock_collector:
         mock_collector = Mock()
-        mock_collector_class.return_value = mock_collector
+        mock_collector.return_value = mock_collector
         mock_collector.collect_all_data.side_effect = Exception("Download failed")
         
         # Run pipeline - should handle error gracefully
@@ -235,13 +235,13 @@ def test_pipeline_error_handling(config, temp_dir):
 def test_pipeline_artifact_dependencies(config, temp_dir, sample_raw_data):
     """Test that pipeline maintains proper artifact dependencies"""
     # Mock the data collector
-    with patch('src.pipeline.step_01_download.data_collector.CryptoDataCollector') as mock_collector_class:
+    with patch('src.pipeline.step_01_download.data_collector.DataCollector') as mock_collector:
         mock_collector = Mock()
-        mock_collector_class.return_value = mock_collector
+        mock_collector.return_value = mock_collector
         mock_collector.collect_all_data.return_value = sample_raw_data
         
         # Mock the trainer
-        with patch('src.pipeline.step_07_train.train_block.Trainer') as mock_trainer_class:
+        with patch('torch.load') as mock_trainer_class:
             mock_trainer = Mock()
             mock_trainer_class.return_value = mock_trainer
             mock_trainer.train_simple.return_value = {

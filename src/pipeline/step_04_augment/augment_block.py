@@ -14,17 +14,22 @@ logger = get_logger(__name__)
 class AugmentBlock(PipelineBlock):
     """Add technical indicators to split data"""
 
-    def run(self, split_artifact: SplitDataArtifact) -> AugmentDataArtifact:
+    def run(self, split_artifact: SplitDataArtifact = None) -> AugmentDataArtifact:
         """
         Add technical indicators to train and validation data
 
         Args:
-            split_artifact: SplitDataArtifact from split block
+            split_artifact: SplitDataArtifact from split block (optional, will load from disk if not provided)
 
         Returns:
             AugmentDataArtifact
         """
         logger.info("Running augment block - adding technical indicators")
+
+        # Load split artifact if not provided
+        if split_artifact is None:
+            split_artifact_data = self.artifact_io.read_json('artifacts/step_03_split/split_artifact.json')
+            split_artifact = SplitDataArtifact(**split_artifact_data)
 
         # Load split data
         train_df = self.artifact_io.read_dataframe(split_artifact.train_path)
@@ -48,7 +53,9 @@ class AugmentBlock(PipelineBlock):
             raise ValueError(f"Coin count changed during augmentation: {original_cols} -> {augmented_cols}")
 
         # Check indicator columns were added
-        expected_indicators = ['rsi', 'macd', 'macd_signal', 'macd_histogram', 'bb_position', 'ema_9', 'ema_21', 'ema_50', 'ema_ratio']
+        expected_indicators = ['rsi', 'macd', 'bb_position', 'ema_9', 'ema_21', 'ema_50', 'ema_ratio',
+                               'stochastic', 'williams_r', 'atr', 'adx', 'obv', 'volume_roc', 'vwap',
+                               'price_momentum', 'support_resistance', 'volatility_regime']
         sample_coin = [c.replace('_close', '') for c in train_df.columns if c.endswith('_close')][0]
 
         added_indicators = 0

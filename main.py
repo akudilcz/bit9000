@@ -60,6 +60,7 @@ def pipeline():
     pass
 
 
+# Individual atomic commands
 @pipeline.command()
 def reset():
     """Reset: Clean artifacts directory"""
@@ -70,13 +71,11 @@ def reset():
 
 
 @pipeline.command()
-@click.option('--start-date', default=None, help='Start date (YYYY-MM-DD)')
-@click.option('--end-date', default=None, help='End date (YYYY-MM-DD)')
-def download(start_date, end_date):
+def download():
     """Download: Fetch raw OHLCV data"""
     click.echo("\n[STEP 01] DOWNLOAD: Fetching cryptocurrency data...")
     orchestrator = get_orchestrator()
-    orchestrator.run_step("Download", DownloadBlock, start_date=start_date, end_date=end_date)
+    orchestrator.run_step("Download", DownloadBlock)
     click.echo("[OK] Download complete\n")
 
 
@@ -85,8 +84,7 @@ def clean():
     """Clean: Data cleaning and quality checks"""
     click.echo("\n[STEP 02] CLEAN: Cleaning data...")
     orchestrator = get_orchestrator()
-    raw_artifact = orchestrator.load_raw_artifact('artifacts/step_01_download/raw_data_artifact.json')
-    orchestrator.run_step("Clean", CleanBlock, raw_artifact)
+    orchestrator.run_step("Clean", CleanBlock)
     click.echo("[OK] Clean complete\n")
 
 
@@ -95,8 +93,7 @@ def split():
     """Split: Temporal train/validation split"""
     click.echo("\n[STEP 03] SPLIT: Splitting data temporally...")
     orchestrator = get_orchestrator()
-    clean_artifact = orchestrator.load_clean_artifact('artifacts/step_02_clean/clean_data_artifact.json')
-    orchestrator.run_step("Split", EarlySplitBlock, clean_artifact)
+    orchestrator.run_step("Split", EarlySplitBlock)
     click.echo("[OK] Split complete\n")
 
 
@@ -105,8 +102,7 @@ def augment():
     """Augment: Add technical indicators to split data"""
     click.echo("\n[STEP 04] AUGMENT: Adding technical indicators...")
     orchestrator = get_orchestrator()
-    split_artifact = orchestrator.load_split_artifact('artifacts/step_03_split/split_artifact.json')
-    orchestrator.run_step("Augment", AugmentBlock, split_artifact)
+    orchestrator.run_step("Augment", AugmentBlock)
     click.echo("[OK] Augment complete\n")
 
 
@@ -115,60 +111,8 @@ def tokenize():
     """Tokenize: Convert prices to token sequences"""
     click.echo("\n[STEP 05] TOKENIZE: Converting prices to tokens...")
     orchestrator = get_orchestrator()
-    augment_artifact = orchestrator.load_augment_artifact('artifacts/step_04_augment/augment_artifact.json')
-    orchestrator.run_step("Tokenize", TokenizeBlock, augment_artifact)
+    orchestrator.run_step("Tokenize", TokenizeBlock)
     click.echo("[OK] Tokenize complete\n")
-
-
-@pipeline.command()
-def sequences():
-    """Sequences: Create rolling windows for supervised learning"""
-    click.echo("\n[STEP 06] SEQUENCES: Creating rolling windows...")
-    orchestrator = get_orchestrator()
-    tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
-    orchestrator.run_step("Sequences", SequenceBlock, tokenize_artifact)
-    click.echo("[OK] Sequences complete\n")
-
-
-@pipeline.command()
-@click.option('--num-trials', default=30, help='Number of trials to run')
-@click.option('--epochs-per-trial', default=20, help='Epochs per trial')
-@click.option('--timeout-hours', default=None, help='Timeout in hours (optional)')
-def tune(num_trials, epochs_per_trial, timeout_hours):
-    """Tune: Hyperparameter tuning using Optuna"""
-    click.echo("\n[TUNE] HYPERPARAMETER TUNING: Optimizing model hyperparameters...")
-    config = load_config()
-    
-    # Load sequences
-    orchestrator = get_orchestrator()
-    seq_data = orchestrator.load_json_artifact('artifacts/step_06_sequences/sequences_artifact.json')
-    sequences_dir = Path(seq_data['train_X_path']).parent
-    
-    click.echo(f"Loading sequences from {sequences_dir}...")
-    train_X = torch.load(sequences_dir / 'train_X.pt')
-    train_y = torch.load(sequences_dir / 'train_y.pt')
-    val_X = torch.load(sequences_dir / 'val_X.pt')
-    val_y = torch.load(sequences_dir / 'val_y.pt')
-    
-    click.echo(f"  Train: X={train_X.shape}, y={train_y.shape}")
-    click.echo(f"  Val:   X={val_X.shape}, y={val_y.shape}")
-    
-    # Run tuning
-    best_params = run_tuning(
-        config=config,
-        train_X=train_X,
-        train_y=train_y,
-        val_X=val_X,
-        val_y=val_y,
-        num_trials=num_trials,
-        epochs_per_trial=epochs_per_trial,
-        timeout_hours=timeout_hours
-    )
-    
-    click.echo(f"\nBest parameters found:")
-    for key, value in best_params.items():
-        click.echo(f"  {key}: {value}")
-    click.echo("[OK] Tuning complete\n")
 
 
 @pipeline.command()
@@ -176,8 +120,7 @@ def train():
     """Train: Train transformer model on sequences"""
     click.echo("\n[STEP 07] TRAIN: Training model...")
     orchestrator = get_orchestrator()
-    sequences_artifact = orchestrator.load_sequences_artifact('artifacts/step_06_sequences/sequences_artifact.json')
-    orchestrator.run_step("Train", TrainBlock, sequences_artifact)
+    orchestrator.run_step("Train", TrainBlock)
     click.echo("[OK] Train complete\n")
 
 
@@ -186,9 +129,7 @@ def evaluate():
     """Evaluate: Validate model quality"""
     click.echo("\n[STEP 08] EVALUATE: Validating model...")
     orchestrator = get_orchestrator()
-    train_artifact = orchestrator.load_trained_model_artifact('artifacts/step_07_train/train_artifact.json')
-    sequences_artifact = orchestrator.load_sequences_artifact('artifacts/step_06_sequences/sequences_artifact.json')
-    orchestrator.run_step("Evaluate", EvaluateBlock, train_artifact, sequences_artifact)
+    orchestrator.run_step("Evaluate", EvaluateBlock)
     click.echo("[OK] Evaluate complete\n")
 
 
@@ -197,16 +138,24 @@ def inference():
     """Inference: Predict next 8 hours"""
     click.echo("\n[STEP 09] INFERENCE: Predicting next 8 hours...")
     orchestrator = get_orchestrator()
-    train_artifact = orchestrator.load_trained_model_artifact('artifacts/step_07_train/train_artifact.json')
-    tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
-    orchestrator.run_step("Inference", InferenceBlock, train_artifact, tokenize_artifact)
+    orchestrator.run_step("Inference", InferenceBlock)
     click.echo("[OK] Inference complete\n")
 
 
 @pipeline.command()
+def sequences():
+    """Sequences: Create rolling windows for supervised learning"""
+    click.echo("\n[STEP 06] SEQUENCES: Creating rolling windows...")
+    orchestrator = get_orchestrator()
+    orchestrator.run_step("Sequences", SequenceBlock)
+    click.echo("[OK] Sequences complete\n")
+
+
+# Composite sequence commands
+@pipeline.command("run-seq-all")
 @click.option('--start-date', default=None, help='Start date (YYYY-MM-DD)')
 @click.option('--end-date', default=None, help='End date (YYYY-MM-DD)')
-def run_all(start_date, end_date):
+def run_seq_all(start_date, end_date):
     """Run all pipeline steps"""
     click.echo("\n" + "="*70)
     click.echo("RUNNING COMPLETE PIPELINE")
@@ -221,47 +170,39 @@ def run_all(start_date, end_date):
         
         # Step 01: Download
         click.echo("\n[STEP 01] DOWNLOAD...")
-        orchestrator.run_step("Download", DownloadBlock, start_date=start_date, end_date=end_date)
+        orchestrator.run_step("Download", DownloadBlock)
         
         # Step 02: Clean
         click.echo("\n[STEP 02] CLEAN...")
-        raw_artifact = orchestrator.load_raw_artifact('artifacts/step_01_download/raw_data_artifact.json')
-        orchestrator.run_step("Clean", CleanBlock, raw_artifact)
+        orchestrator.run_step("Clean", CleanBlock)
         
         # Step 03: Split
         click.echo("\n[STEP 03] SPLIT...")
-        clean_artifact = orchestrator.load_clean_artifact('artifacts/step_02_clean/clean_data_artifact.json')
-        orchestrator.run_step("Split", EarlySplitBlock, clean_artifact)
+        orchestrator.run_step("Split", EarlySplitBlock)
         
         # Step 04: Augment
         click.echo("\n[STEP 04] AUGMENT...")
-        split_artifact = orchestrator.load_split_artifact('artifacts/step_03_split/split_artifact.json')
-        orchestrator.run_step("Augment", AugmentBlock, split_artifact)
+        orchestrator.run_step("Augment", AugmentBlock)
         
         # Step 05: Tokenize
         click.echo("\n[STEP 05] TOKENIZE...")
-        augment_artifact = orchestrator.load_augment_artifact('artifacts/step_04_augment/augment_artifact.json')
-        orchestrator.run_step("Tokenize", TokenizeBlock, augment_artifact)
+        orchestrator.run_step("Tokenize", TokenizeBlock)
         
         # Step 06: Sequences
         click.echo("\n[STEP 06] SEQUENCES...")
-        tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
-        orchestrator.run_step("Sequences", SequenceBlock, tokenize_artifact)
+        orchestrator.run_step("Sequences", SequenceBlock)
         
         # Step 07: Train
         click.echo("\n[STEP 07] TRAIN...")
-        sequences_artifact = orchestrator.load_sequences_artifact('artifacts/step_06_sequences/sequences_artifact.json')
-        orchestrator.run_step("Train", TrainBlock, sequences_artifact)
+        orchestrator.run_step("Train", TrainBlock)
         
         # Step 08: Evaluate
         click.echo("\n[STEP 08] EVALUATE...")
-        train_artifact = orchestrator.load_trained_model_artifact('artifacts/step_07_train/train_artifact.json')
-        orchestrator.run_step("Evaluate", EvaluateBlock, train_artifact, sequences_artifact)
+        orchestrator.run_step("Evaluate", EvaluateBlock)
         
         # Step 09: Inference
         click.echo("\n[STEP 09] INFERENCE...")
-        tokenize_artifact = orchestrator.load_tokenize_artifact('artifacts/step_05_tokenize/tokenize_artifact.json')
-        orchestrator.run_step("Inference", InferenceBlock, train_artifact, tokenize_artifact)
+        orchestrator.run_step("Inference", InferenceBlock)
         
         click.echo("\n" + "="*70)
         click.echo("PIPELINE COMPLETE - ALL STEPS SUCCESSFUL")
@@ -274,8 +215,8 @@ def run_all(start_date, end_date):
         sys.exit(1)
 
 
-@pipeline.command()
-def run_from_clean():
+@pipeline.command("run-seq-from-clean")
+def run_seq_from_clean():
     """Run pipeline from clean step (skips reset and download)"""
     click.echo("\n" + "="*70)
     click.echo("RUNNING PIPELINE FROM CLEAN STEP")

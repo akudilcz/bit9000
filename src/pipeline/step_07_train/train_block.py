@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from src.pipeline.base import PipelineBlock
-from src.pipeline.schemas import ArtifactMetadata
+from src.pipeline.schemas import ArtifactMetadata, SequencesArtifact
 from src.model import create_model
 from src.utils.logger import get_logger
 
@@ -49,11 +49,16 @@ class TrainedModelArtifact:
 class TrainBlock(PipelineBlock):
     """Train transformer model on token sequences"""
     
-    def run(self, sequences_artifact):
+    def run(self, sequences_artifact=None):
         """Train model on sequences"""
         logger.info("="*70)
         logger.info("STEP 6: TRAIN - Training 256-class token prediction")
         logger.info("="*70)
+        
+        # Load sequences artifact if not provided
+        if sequences_artifact is None:
+            sequences_artifact_data = self.artifact_io.read_json('artifacts/step_06_sequences/sequences_artifact.json')
+            sequences_artifact = SequencesArtifact(**sequences_artifact_data)
         
         # Load training config
         train_config = self.config['training']
@@ -283,7 +288,7 @@ class TrainBlock(PipelineBlock):
     
     def _validate_epoch(self, model, data_loader, criterion, device) -> Tuple[float, float, float, float, float]:
         """
-        Validate for one epoch with enhanced metrics tracking
+        Validate for one epoch with enhanced metrics tracking and threshold calibration
         
         Returns:
             (val_loss, val_acc, avg_precision, threshold_buy, threshold_sell)
@@ -347,183 +352,84 @@ class TrainBlock(PipelineBlock):
             # Enhanced logging with precision focus
             logger.info(f"    Val metrics: loss={avg_loss:.4f}, acc={avg_acc:.4f}, dist_err={avg_distance_error:.2f}")
             
-            return avg_loss, avg_acc, avg_acc, 0.5, 0.5
-    
-    def _compute_directional_targets(self) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Compute directional targets (price went up/down) from validation RAW PRICES
-        This EXACTLY matches the evaluation logic.
-        
-        The model predicts on tokenized data, but we calibrate thresholds based on
-        whether the ACTUAL RAW PRICE went up/down, not the tokenized price.
-        
-        Returns:
-            (buy_targets, sell_targets) - binary arrays indicating if price went up/down
-        """
-        # Load ACTUAL cleaned prices (same as evaluation uses)
-        split_artifact_path = self.artifact_io.base_dir / 'step_03_split' / 'split_artifact.json'
-        with open(split_artifact_path, 'r') as f:
-            split_artifact = json.load(f)
-        val_df = pd.read_parquet(split_artifact['val_path'])
-        
-        # Get target coin and raw prices
-        target_coin = self.config['data']['target_coin']
-        price_col = f'{target_coin}_close'  # e.g., "XRP_close" - raw prices
-        
-        xrp_prices = val_df[price_col].values
-        
-        # Align sequences with actual data (EXACTLY matching evaluation logic)
-        input_length = self.config['sequences']['input_length']
-        prediction_horizon = self.config['sequences'].get('prediction_horizon', 1)
-        
-        # Number of sequences created in step_06
-        num_sequences = len(xrp_prices) - (input_length + prediction_horizon - 1)
-        
-        # Each sequence i corresponds to:
-        #   - Current price: xrp_prices[i + input_length - 1]
-        #   - Future price: xrp_prices[i + input_length + prediction_horizon - 1]
-        sequence_indices = np.arange(num_sequences) + input_length - 1
-        
-        # Get current and future prices (EXACTLY matching evaluation)
-        xrp_current_prices = xrp_prices[sequence_indices]
-        future_indices = sequence_indices + prediction_horizon
-        future_indices = np.clip(future_indices, 0, len(xrp_prices) - 1)
-        xrp_future_prices = xrp_prices[future_indices]
-        
-        # Calculate directional movement based on ACTUAL RAW PRICES
-        price_changes = xrp_future_prices - xrp_current_prices
-        buy_targets = (price_changes > 0).astype(np.int64)  # 1 if actual price went up
-        sell_targets = (price_changes < 0).astype(np.int64)  # 1 if actual price went down
-        
-        return buy_targets, sell_targets
-    
-    def _calibrate_threshold(self, probs: np.ndarray, targets: np.ndarray, 
-                            target_rate: float = 0.02) -> Tuple[float, float, int, int]:
-        """
-        Find optimal threshold that achieves target signal rate while maximizing precision
-        
-        Args:
-            probs: Probability scores for the signal
-            targets: Binary targets (1 = correct direction, 0 = wrong direction)
-            target_rate: Target signal rate (e.g., 0.05 for 5%)
-        
-        Returns:
-            (threshold, precision, num_signals, num_correct)
-        """
-        sorted_indices = np.argsort(-probs)
-        sorted_probs = probs[sorted_indices]
-        sorted_targets = targets[sorted_indices]
-        
-        N = len(probs)
-        target_num_signals = max(1, int(N * target_rate))
-        calib_cfg = self.config.get('inference', {}).get('calibration', {})
-        mode = calib_cfg.get('mode', 'hit_rate_exact')
-        min_signals = int(calib_cfg.get('min_signals', 20))
-        
-        if mode == 'precision_at_most_rate':
-            best_precision = -1.0
-            best_k = None
-            # Scan k from min_signals to target_num_signals
-            k_start = min(target_num_signals, max(min_signals, 1))
-            if k_start > target_num_signals:
-                k_start = target_num_signals
-            for k in range(k_start, target_num_signals + 1):
-                # Top-k by prob
-                top_k_targets = sorted_targets[:k]
-                prec_k = float(top_k_targets.sum()) / float(k) if k > 0 else 0.0
-                if prec_k > best_precision:
-                    best_precision = prec_k
-                    best_k = k
-            if best_k is None or best_k == 0:
-                threshold = 1.0  # no signals
-                num_signals = 0
-                num_correct = 0
-                precision = 0.0
-            else:
-                threshold = sorted_probs[best_k - 1]
-                threshold = max(0.0, threshold - 1e-6)
-                signal_mask = probs > threshold
-                num_signals = int(signal_mask.sum())
-                num_correct = int((targets[signal_mask] == 1).sum()) if num_signals > 0 else 0
-                precision = float(num_correct) / float(num_signals) if num_signals > 0 else 0.0
-        else:
-            # hit_rate_exact
-            if target_num_signals < N:
-                threshold = sorted_probs[target_num_signals - 1]
-                threshold = max(0.0, threshold - 1e-6)
-            else:
-                threshold = 0.0
-            signal_mask = probs > threshold
-            num_signals = int(signal_mask.sum())
-            if num_signals > 0:
-                num_correct = int((targets[signal_mask] == 1).sum())
-                precision = float(num_correct) / float(num_signals)
-            else:
-                num_correct = 0
-                precision = 0.0
-        
-        return float(threshold), float(precision), int(num_signals), int(num_correct)
-
-    def _calibrate_token_change_threshold(self, predicted_token_change: np.ndarray, targets: np.ndarray,
-                                          target_rate: float = 0.02, direction: str = 'buy') -> Tuple[float, float, int, int]:
-        """
-        Find optimal token change threshold that achieves target signal rate while maximizing precision
-        
-        Args:
-            predicted_token_change: Predicted token changes (can be negative)
-            targets: Binary targets (1 = correct prediction, 0 = incorrect)
-            target_rate: Target signal rate (e.g., 0.05 for 5%)
-            direction: 'buy' for high positive changes, 'sell' for high negative changes
-        
-        Returns:
-            (token_change_threshold, precision, num_signals, num_correct)
-        """
-        N = len(predicted_token_change)
-        target_num_signals = max(1, int(N * target_rate))
-        
-        if direction == 'buy':
-            # BUY: Select top target_rate% by predicted token change (largest increases)
-            percentile = 100 * (1 - target_rate)  # e.g., 95th percentile for top 5%
-            threshold = float(np.percentile(predicted_token_change, percentile))
+            # Calibrate thresholds based on token changes (not probabilities)
+            all_probs_concat = np.concatenate(all_probs, axis=0)  # (samples, 256)
+            all_targets_concat = np.concatenate(all_targets, axis=0)  # (samples,)
             
-            # Apply threshold: BUY signal when predicted_token_change > threshold
-            signal_mask = predicted_token_change > threshold
-            num_signals = int(signal_mask.sum())
+            # Get predicted tokens (argmax of logits)
+            predicted_tokens = np.argmax(all_probs_concat, axis=1)
+            actual_tokens = all_targets_concat
             
-            # If we got too few or too many signals, adjust threshold
-            if num_signals == 0 or num_signals > 2 * target_num_signals:
-                # Fall back to sorting and selecting exact top-k
-                sorted_changes = np.sort(predicted_token_change)[::-1]  # Descending
-                if target_num_signals < N:
-                    threshold = float(sorted_changes[target_num_signals])
-                    signal_mask = predicted_token_change >= threshold
-                    num_signals = int(signal_mask.sum())
+            # Calculate token changes (future - current, where current is middle of 48-hour window)
+            # In our case, we're predicting 1 hour ahead from the last token in sequence
+            token_changes = actual_tokens - predicted_tokens
             
-            num_correct = int(targets[signal_mask].sum()) if num_signals > 0 else 0
-            precision = float(num_correct) / float(num_signals) if num_signals > 0 else 0.0
+            # Target signal rate: 5%
+            target_signal_rate = 0.05
+            target_count = int(len(token_changes) * target_signal_rate)
             
-            return float(threshold), precision, num_signals, num_correct
-        
-        else:  # direction == 'sell'
-            # SELL: Select bottom target_rate% by predicted token change (largest decreases)
-            percentile = 100 * target_rate  # e.g., 5th percentile for bottom 5%
-            threshold = float(np.percentile(predicted_token_change, percentile))
+            logger.info(f"    Calibrating thresholds for ~{target_signal_rate*100:.0f}% signal rate ({target_count} samples)")
             
-            # Apply threshold: SELL signal when predicted_token_change < threshold
-            signal_mask = predicted_token_change < threshold
-            num_signals = int(signal_mask.sum())
+            # ========== CALIBRATE BUY THRESHOLD ==========
+            # BUY: token_change > buy_threshold (price goes up)
+            # Try thresholds and find one that gives ~5% positive signal rate
+            best_buy_threshold = 5
+            best_buy_precision = 0.0
+            buy_thresholds_to_try = list(range(1, 50, 2))  # 1, 3, 5, 7, ... 49
             
-            # If we got too few or too many signals, adjust threshold
-            target_num_signals = max(1, int(N * target_rate))
-            if num_signals == 0 or num_signals > 2 * target_num_signals:
-                # Fall back to sorting and selecting exact bottom-k
-                sorted_changes = np.sort(predicted_token_change)  # Ascending
-                if target_num_signals < N:
-                    threshold = float(sorted_changes[target_num_signals])
-                    signal_mask = predicted_token_change <= threshold
-                    num_signals = int(signal_mask.sum())
+            for threshold in buy_thresholds_to_try:
+                buy_signal_mask = token_changes > threshold
+                signal_count = buy_signal_mask.sum()
+                signal_rate = signal_count / len(token_changes)
+                
+                if signal_count > 0:
+                    # Precision: among flagged BUY samples, how many actually went up?
+                    actual_positive = (token_changes[buy_signal_mask] > 0).sum()
+                    buy_precision = actual_positive / signal_count
+                    
+                    # Prefer threshold closest to 5% rate
+                    rate_diff = abs(signal_rate - target_signal_rate)
+                    
+                    if signal_count >= target_count * 0.8 and signal_count <= target_count * 1.2:
+                        # Within acceptable range of 5%
+                        if buy_precision > best_buy_precision:
+                            best_buy_precision = buy_precision
+                            best_buy_threshold = threshold
             
-            num_correct = int(targets[signal_mask].sum()) if num_signals > 0 else 0
-            precision = float(num_correct) / float(num_signals) if num_signals > 0 else 0.0
+            buy_signal_mask = token_changes > best_buy_threshold
+            buy_signal_rate = buy_signal_mask.sum() / len(token_changes)
             
-            return float(threshold), precision, num_signals, num_correct
+            logger.info(f"    BUY: threshold={best_buy_threshold}, signal_rate={buy_signal_rate*100:.2f}%, precision={best_buy_precision*100:.2f}%")
+            
+            # ========== CALIBRATE SELL THRESHOLD ==========
+            # SELL: token_change < sell_threshold (price goes down)
+            # Try thresholds and find one that gives ~5% negative signal rate
+            best_sell_threshold = -5
+            best_sell_precision = 0.0
+            sell_thresholds_to_try = list(range(-1, -50, -2))  # -1, -3, -5, -7, ... -49
+            
+            for threshold in sell_thresholds_to_try:
+                sell_signal_mask = token_changes < threshold
+                signal_count = sell_signal_mask.sum()
+                signal_rate = signal_count / len(token_changes)
+                
+                if signal_count > 0:
+                    # Precision: among flagged SELL samples, how many actually went down?
+                    actual_negative = (token_changes[sell_signal_mask] < 0).sum()
+                    sell_precision = actual_negative / signal_count
+                    
+                    # Prefer threshold closest to 5% rate
+                    rate_diff = abs(signal_rate - target_signal_rate)
+                    
+                    if signal_count >= target_count * 0.8 and signal_count <= target_count * 1.2:
+                        # Within acceptable range of 5%
+                        if sell_precision > best_sell_precision:
+                            best_sell_precision = sell_precision
+                            best_sell_threshold = threshold
+            
+            sell_signal_mask = token_changes < best_sell_threshold
+            sell_signal_rate = sell_signal_mask.sum() / len(token_changes)
+            
+            logger.info(f"    SELL: threshold={best_sell_threshold}, signal_rate={sell_signal_rate*100:.2f}%, precision={best_sell_precision*100:.2f}%")
+            
+            return avg_loss, avg_acc, max(best_buy_precision, best_sell_precision), best_buy_threshold, best_sell_threshold
