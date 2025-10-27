@@ -61,7 +61,8 @@ class TrainBlock(PipelineBlock):
         """Train model on sequences"""
         logger.info("="*70)
         num_classes = self.config['model']['num_classes']
-        logger.info(f"STEP 6: TRAIN - Training {num_classes}-class token prediction")
+        model_version = self.config['model'].get('version', 'v6')
+        logger.info(f"STEP 6: TRAIN - Training {model_version} {num_classes}-token next-token prediction")
         logger.info("="*70)
         
         # Load sequences artifact if not provided
@@ -90,12 +91,18 @@ class TrainBlock(PipelineBlock):
         val_X = torch.load(sequences_artifact.val_X_path)
         val_y = torch.load(sequences_artifact.val_y_path)
         
-        logger.info(f"  Train: X={train_X.shape}, y={train_y.shape}")
-        logger.info(f"  Val: X={val_X.shape}, y={val_y.shape}")
+        # Load trading labels
+        train_trading_path = sequences_artifact.train_X_path.parent / "train_trading.pt"
+        val_trading_path = sequences_artifact.val_X_path.parent / "val_trading.pt"
+        train_trading = torch.load(train_trading_path)
+        val_trading = torch.load(val_trading_path)
         
-        # Create data loaders
-        train_dataset = TensorDataset(train_X, train_y)
-        val_dataset = TensorDataset(val_X, val_y)
+        logger.info(f"  Train: X={train_X.shape}, y={train_y.shape}, trading={train_trading.shape}")
+        logger.info(f"  Val: X={val_X.shape}, y={val_y.shape}, trading={val_trading.shape}")
+        
+        # Create data loaders (include trading labels)
+        train_dataset = TensorDataset(train_X, train_y, train_trading)
+        val_dataset = TensorDataset(val_X, val_y, val_trading)
         
         num_workers = train_config.get('num_workers', 0)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
@@ -113,12 +120,22 @@ class TrainBlock(PipelineBlock):
         logger.info(f"  Using {num_classes}-class token prediction")
         
         # Loss and optimizer
-        # Use ordinal loss to respect that tokens represent ordered returns
-        from src.utils.ordinal_loss import SoftOrdinalCrossEntropyLoss
+        # For v6 decoder: use standard cross-entropy for next-token prediction
+        model_version = self.config['model'].get('version', 'v6')
+        if model_version != 'v6':
+            raise ValueError(f"Only v6 model is supported, got {model_version}")
+        
+        # Standard cross-entropy for GPT-style next-token prediction
         label_smoothing = train_config.get('label_smoothing', 0.0)
-        sigma = train_config.get('ordinal_sigma', 3.0)  # Controls spread of soft targets
-        criterion = SoftOrdinalCrossEntropyLoss(num_classes=num_classes, sigma=sigma, label_smoothing=label_smoothing)
-        logger.info(f"  Using Soft Ordinal CE Loss (sigma={sigma}, label_smoothing={label_smoothing})")
+        criterion_tokens = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        logger.info(f"  Using Cross-Entropy Loss for next-token (label_smoothing={label_smoothing})")
+        
+        # Trading signal loss with class weights (weight HOLD less since it's ~90%)
+        trading_class_weights = train_config.get('trading_class_weights', [1.0, 0.1, 1.0])
+        trading_weights = torch.tensor(trading_class_weights, device=device)
+        criterion_trading = nn.CrossEntropyLoss(weight=trading_weights)
+        logger.info(f"  Using Weighted Cross-Entropy Loss for trading (weights={trading_weights.tolist()})")
+        
         optimizer = optim.Adam(
             model.parameters(),
             lr=learning_rate,
@@ -141,13 +158,18 @@ class TrainBlock(PipelineBlock):
         
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda e: warmup_lr(e) / learning_rate)
         
+        # Pass criterion as tuple for v6 (for easier unpacking in train/val functions)
+        criterion_tuple = (criterion_tokens, criterion_trading)
+        
         # Training loop
         logger.info("\n[3/4] Training...")
         history = {
             'train_loss': [],
-            'train_acc': [],
+            'train_token_acc': [],
+            'train_trading_acc': [],
             'val_loss': [],
-            'val_acc': []
+            'val_token_acc': [],
+            'val_trading_acc': []
         }
         
         best_val_loss = float('inf')
@@ -158,50 +180,77 @@ class TrainBlock(PipelineBlock):
         
         for epoch in range(epochs):
             # Train
-            train_loss, train_acc = self._train_epoch(model, train_loader, criterion, optimizer, device)
+            train_loss, train_token_acc, train_trading_acc = self._train_epoch(model, train_loader, criterion_tuple, optimizer, device)
             
             # Validate
-            val_loss, val_acc, avg_precision, threshold_buy, threshold_sell = self._validate_epoch(
-                model, val_loader, criterion, device
-            )
+            val_result = self._validate_epoch(model, val_loader, criterion_tuple, device, model_version)
+            val_loss = val_result['loss']
+            val_token_acc = val_result['token_acc']
             
             # Update scheduler
             scheduler.step()
             
             # Record history
             history['train_loss'].append(train_loss)
-            history['train_acc'].append(train_acc)
+            history['train_token_acc'].append(train_token_acc)
+            history['train_trading_acc'].append(train_trading_acc)
             history['val_loss'].append(val_loss)
-            history['val_acc'].append(val_acc)
+            history['val_token_acc'].append(val_token_acc)
+            
+            val_trading_acc = val_result.get('trading_acc', 0)
+            history['val_trading_acc'].append(val_trading_acc)
             
             # Record epoch-level diagnostics
-            self.diagnostics['epochs'].append({
+            epoch_diag = {
                 'epoch': epoch + 1,
                 'train_loss': train_loss,
-                'train_acc': train_acc,
+                'train_token_acc': train_token_acc,
+                'train_trading_acc': train_trading_acc,
                 'val_loss': val_loss,
-                'val_acc': val_acc,
-                'avg_precision': avg_precision,
-                'threshold_buy': threshold_buy,
-                'threshold_sell': threshold_sell,
+                'val_token_acc': val_token_acc,
+                'val_trading_acc': val_trading_acc,
+                'val_trading_acc_buy': val_result.get('trading_acc_buy', 0),
+                'val_trading_acc_hold': val_result.get('trading_acc_hold', 0),
+                'val_trading_acc_sell': val_result.get('trading_acc_sell', 0),
                 'learning_rate': optimizer.param_groups[0]['lr']
-            })
+            }
+            
+            self.diagnostics['epochs'].append(epoch_diag)
             
             # Log progress
-            logger.info(
-                f"  Epoch {epoch+1:3d}/{epochs}: "
-                f"train_loss={train_loss:.4f}, train_acc={train_acc:.4f}, "
-                f"val_loss={val_loss:.4f}, val_acc={val_acc:.4f}, "
-                f"precision={avg_precision:.3f}"
-            )
+            if model_version == 'v6':
+                logger.info(
+                    f"  Epoch {epoch+1:3d}/{epochs}: "
+                    f"train_loss={train_loss:.4f}, tok_acc={train_token_acc:.3f}, trd_acc={train_trading_acc:.3f}, "
+                    f"val_loss={val_loss:.4f}, tok_acc={val_token_acc:.3f}, trd_acc={val_trading_acc:.3f}"
+                )
+                # Log detailed trading signal metrics with confusion matrix style counts
+                confusion_matrix = val_result.get('confusion_matrix', {})
+                logger.info(
+                    f"    Trading signals:"
+                )
+                for signal in ['BUY', 'SELL', 'HOLD']:
+                    if signal in confusion_matrix:
+                        pred = confusion_matrix[signal]['predicted']
+                        true = confusion_matrix[signal]['true']
+                        acc = val_result.get(f'trading_acc_{signal.lower()}', 0)
+                        prec = val_result.get(f'trading_prec_{signal.lower()}', 0)
+                        logger.info(
+                            f"      {signal:4s}: predicted={pred:3d}/{true:3d} true | "
+                            f"acc={acc:.3f} prec={prec:.3f}"
+                        )
+            else:
+                logger.info(
+                    f"  Epoch {epoch+1:3d}/{epochs}: "
+                    f"train_loss={train_loss:.4f}, train_acc={train_token_acc:.4f}, "
+                    f"val_loss={val_loss:.4f}, val_acc={val_token_acc:.4f}"
+                )
             
-            # Early stopping based on validation loss (token prediction)
+            # Early stopping based on validation loss
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                best_val_acc = val_acc
+                best_val_acc = val_token_acc
                 best_model_state = model.state_dict().copy()
-                best_calibrated_threshold_buy = threshold_buy
-                best_calibrated_threshold_sell = threshold_sell
                 patience_counter = 0
                 logger.info(f"    → New best model (val_loss={best_val_loss:.4f})")
             else:
@@ -272,176 +321,274 @@ class TrainBlock(PipelineBlock):
         
         return artifact
     
-    def _train_epoch(self, model, data_loader, criterion, optimizer, device) -> Tuple[float, float]:
-        """Train for one epoch"""
+    def _train_epoch(self, model, data_loader, criterion, optimizer, device) -> Tuple[float, float, float]:
+        """Train for one epoch with multi-task learning"""
         model.train()
         total_loss = 0
-        total_correct = 0
-        total_samples = 0
+        total_token_correct = 0
+        total_token_samples = 0
+        total_trading_correct = 0
+        total_trading_samples = 0
         
         pbar = tqdm(data_loader, desc='Training', leave=False, ncols=100)
         
-        for batch_idx, (X_batch, y_batch) in enumerate(pbar):
+        model_version = self.config['model'].get('version', 'v6')
+        
+        # Get criterion functions (for v6, criterion is actually a tuple)
+        if model_version == 'v6':
+            criterion_tokens, criterion_trading = criterion
+        else:
+            criterion_single = criterion
+        
+        # Timing profiling
+        import time
+        batch_times = []
+        forward_times = []
+        backward_times = []
+
+        for batch_idx, batch in enumerate(pbar):
+            batch_start = time.time()
+            
+            if model_version == 'v6':
+                X_batch, y_batch, trading_batch = batch
+            else:
+                X_batch, y_batch = batch
+            
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
+            if model_version == 'v6':
+                trading_batch = trading_batch.to(device)
             
-            # Note: Do not add Gaussian noise to categorical token IDs; it degrades embeddings
+            data_time = time.time() - batch_start
             
             optimizer.zero_grad()
-            outputs = model(X_batch)
             
-            # Extract logits from V4 output
-            if isinstance(outputs, dict) and 'horizon_1h' in outputs:
-                logits = outputs['horizon_1h']['logits']
+            forward_start = time.time()
+            
+            if model_version == 'v6':
+                # V6 decoder: multi-task learning
+                outputs = model(X_batch, return_trading=True)
+                logits = outputs['logits']  # (B, L-1, vocab_size)
+                trading_logits = outputs['trading']  # (B, 3)
+                
+                # Next-token prediction loss
+                token_loss = criterion_tokens(
+                    logits.reshape(-1, logits.size(-1)),
+                    y_batch.reshape(-1)
+                )
+                
+                # Trading signal loss
+                trading_loss = criterion_trading(trading_logits, trading_batch)
+                
+                # Combined loss (weight trading loss lower since next-token is primary)
+                trading_weight = self.config['training'].get('trading_loss_weight', 0.3)
+                loss = token_loss + trading_weight * trading_loss
             else:
-                logits = outputs
+                # For v5, use a single criterion
+                outputs = model(X_batch)
+                logits = outputs['logits']
+                loss = criterion_single(logits, y_batch)
             
-            # Compute loss with CrossEntropyLoss
-            loss = criterion(logits, y_batch)
+            forward_time = time.time() - forward_start
             
-            # For accuracy, use hard argmax
-            predictions = torch.argmax(logits, dim=-1)
-            batch_correct = (predictions == y_batch).sum().item()
-            batch_samples = y_batch.numel()
+            # Accuracies
+            token_predictions = torch.argmax(logits, dim=-1)
+            batch_token_correct = (token_predictions == y_batch).sum().item()
+            batch_token_samples = y_batch.numel()
+            
+            trading_predictions = torch.argmax(trading_logits, dim=-1)
+            batch_trading_correct = (trading_predictions == trading_batch).sum().item()
+            batch_trading_samples = trading_batch.numel()
+            
+            total_token_correct += batch_token_correct
+            total_token_samples += batch_token_samples
+            total_trading_correct += batch_trading_correct
+            total_trading_samples += batch_trading_samples
             
             # Collect diagnostics every 50 batches
             if batch_idx % 50 == 0:
                 with torch.no_grad():
-                    self.diagnostics['batches'].append({
+                    diag = {
                         'epoch': len(self.diagnostics['epochs']),
                         'batch': batch_idx,
                         'loss': loss.item(),
-                        'acc': batch_correct/batch_samples,
-                        'logits_stats': {
-                            'min': float(logits.min()),
-                            'max': float(logits.max()),
-                            'mean': float(logits.mean()),
-                            'std': float(logits.std())
-                        },
-                        'predictions': {
-                            'unique_count': len(torch.unique(predictions)),
-                            'most_common': int(torch.mode(predictions)[0]),
-                            'pred_std': float(predictions.float().std())
-                        },
-                        'targets': {
-                            'unique_count': len(torch.unique(y_batch)),
-                            'mean': float(y_batch.float().mean()),
-                            'std': float(y_batch.float().std())
-                        }
-                    })
+                        'token_acc': batch_token_correct/batch_token_samples,
+                        'trading_acc': batch_trading_correct/batch_trading_samples,
+                        'token_loss': token_loss.item(),
+                        'trading_loss': trading_loss.item(),
+                        'data_time': data_time,
+                        'forward_time': forward_time
+                    }
+                    self.diagnostics['batches'].append(diag)
             
             # Backward pass with gradient clipping
             loss.backward()
+            backward_start = time.time()
             max_grad_norm = self.config['training'].get('max_grad_norm', 1.0)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
+            backward_time = time.time() - backward_start
+            
+            # Track times
+            batch_times.append(time.time() - batch_start)
+            forward_times.append(forward_time)
+            backward_times.append(backward_time)
+            
+            # Log profiling every 100 batches
+            if batch_idx % 100 == 0 and batch_idx > 0:
+                avg_batch = sum(batch_times[-100:]) / len(batch_times[-100:])
+                avg_forward = sum(forward_times[-100:]) / len(forward_times[-100:])
+                avg_backward = sum(backward_times[-100:]) / len(backward_times[-100:])
+                logger.info(
+                    f"    Profiling (batches {batch_idx-99}-{batch_idx}): "
+                    f"batch={avg_batch*1000:.1f}ms, forward={avg_forward*1000:.1f}ms, "
+                    f"backward={avg_backward*1000:.1f}ms"
+                )
             
             # Accumulate metrics
             total_loss += loss.item() * X_batch.size(0)
-            total_correct += batch_correct
-            total_samples += batch_samples
             
-            pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{batch_correct/batch_samples:.4f}'})
+            pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'tok_acc': f'{batch_token_correct/batch_token_samples:.3f}',
+                'trd_acc': f'{batch_trading_correct/batch_trading_samples:.3f}'
+            })
         
         avg_loss = total_loss / len(data_loader.dataset)
-        avg_acc = total_correct / total_samples
-        
-        return avg_loss, avg_acc
+        avg_token_acc = total_token_correct / total_token_samples if total_token_samples > 0 else 0
+        avg_trading_acc = total_trading_correct / total_trading_samples
+        return avg_loss, avg_token_acc, avg_trading_acc
     
-    def _validate_epoch(self, model, data_loader, criterion, device) -> Tuple[float, float, float, float, float]:
+    def _validate_epoch(self, model, data_loader, criterion, device, model_version='v6') -> dict:
         """
-        Validate for one epoch with enhanced metrics tracking and threshold calibration
-        
-        Returns:
-            (val_loss, val_acc, avg_precision, threshold_buy, threshold_sell)
+        Validate for one epoch with enhanced metrics tracking
+        Returns dict with metrics for both v5 and v6 models
         """
         model.eval()
         total_loss = 0
-        total_correct = 0
-        total_samples = 0
+        total_token_correct = 0
+        total_token_samples = 0
+        total_trading_correct = 0
+        total_trading_samples = 0
         
-        # Enhanced metrics tracking
-        all_predictions = []
-        all_targets = []
-        all_probs = []
-        distance_errors = []
+        # Get criterion functions
+        criterion_tokens, criterion_trading = criterion
         
-        pbar = tqdm(data_loader, desc='Validation', leave=False, ncols=100)
+        # For trading signal confusion matrix
+        all_trading_preds = []
+        all_trading_targets = []
         
         with torch.no_grad():
-            for X_batch, y_batch in pbar:
+            for batch in data_loader:
+                X_batch, y_batch, trading_batch = batch
+                
                 X_batch = X_batch.to(device)
                 y_batch = y_batch.to(device)
+                trading_batch = trading_batch.to(device)
                 
-                outputs = model(X_batch)
+                # V6 decoder: multi-task learning
+                outputs = model(X_batch, return_trading=True)
+                logits = outputs['logits']
+                trading_logits = outputs['trading']
                 
-                # Extract logits from V4 output
-                if isinstance(outputs, dict) and 'horizon_1h' in outputs:
-                    logits = outputs['horizon_1h']['logits']
-                else:
-                    logits = outputs
+                # Losses
+                token_loss = criterion_tokens(
+                    logits.reshape(-1, logits.size(-1)),
+                    y_batch.reshape(-1)
+                )
+                trading_loss = criterion_trading(trading_logits, trading_batch)
+                trading_weight = self.config['training'].get('trading_loss_weight', 0.3)
+                loss = token_loss + trading_weight * trading_loss
                 
-                # Compute loss
-                loss = criterion(logits, y_batch)
-                predictions = torch.argmax(logits, dim=-1)
-                batch_correct = (predictions == y_batch).sum().item()
-                batch_samples = y_batch.numel()
+                # Token accuracy
+                token_predictions = torch.argmax(logits, dim=-1)
+                batch_token_correct = (token_predictions == y_batch).sum().item()
+                batch_token_samples = y_batch.numel()
                 
-                # Collect enhanced metrics
-                prob_dist = torch.softmax(logits, dim=-1)
-                all_probs.append(prob_dist.cpu().numpy())
-                all_targets.append(y_batch.cpu().numpy())
-                all_predictions.append(predictions.cpu().numpy())
+                # Trading accuracy
+                trading_predictions = torch.argmax(trading_logits, dim=-1)
+                batch_trading_correct = (trading_predictions == trading_batch).sum().item()
+                batch_trading_samples = trading_batch.numel()
                 
-                # Distance error (ordinal-aware metric)
-                distance_error = torch.abs(predictions.float() - y_batch.float()).mean().item()
-                distance_errors.append(distance_error)
+                all_trading_preds.extend(trading_predictions.cpu().numpy())
+                all_trading_targets.extend(trading_batch.cpu().numpy())
+                
+                total_token_correct += batch_token_correct
+                total_token_samples += batch_token_samples
+                total_trading_correct += batch_trading_correct
+                total_trading_samples += batch_trading_samples
                 
                 total_loss += loss.item() * X_batch.size(0)
-                total_correct += batch_correct
-                total_samples += batch_samples
-                
-                pbar.set_postfix({
-                    'loss': f'{loss.item():.4f}', 
-                    'acc': f'{batch_correct/batch_samples:.4f}',
-                    'dist_err': f'{distance_error:.2f}'
-                })
+        
+        avg_loss = total_loss / len(data_loader.dataset)
+        avg_token_acc = total_token_correct / total_token_samples if total_token_samples > 0 else 0
+        avg_trading_acc = total_trading_correct / total_trading_samples
+        
+        result = {
+            'loss': avg_loss,
+            'token_acc': avg_token_acc,
+            'trading_acc': avg_trading_acc,
+        }
+        
+        # Compute per-class trading accuracy
+        all_trading_preds = np.array(all_trading_preds)
+        all_trading_targets = np.array(all_trading_targets)
+        
+        for label, name in [(0, 'BUY'), (1, 'HOLD'), (2, 'SELL')]:
+            mask = all_trading_targets == label
+            if mask.sum() > 0:
+                class_acc = (all_trading_preds[mask] == label).sum() / mask.sum()
+                result[f'trading_acc_{name.lower()}'] = class_acc
+        
+        if model_version == 'v6':
+            avg_trading_acc = total_trading_correct / total_trading_samples
+            result['trading_acc'] = avg_trading_acc
             
-            avg_loss = total_loss / len(data_loader.dataset)
-            avg_acc = total_correct / total_samples
-            avg_distance_error = np.mean(distance_errors)
+            # Compute per-class trading accuracy and precision/recall
+            all_trading_preds = np.array(all_trading_preds)
+            all_trading_targets = np.array(all_trading_targets)
             
-            # Simplified metrics for speed
-            num_classes = self.config['model']['num_classes']
-            all_probs_concat = np.concatenate(all_probs, axis=0)
-            all_targets_concat = np.concatenate(all_targets, axis=0)
+            # Confusion matrix style counts
+            confusion_matrix = {}
+            for label, name in [(0, 'BUY'), (1, 'HOLD'), (2, 'SELL')]:
+                mask = all_trading_targets == label
+                if mask.sum() > 0:
+                    # True instances of this class
+                    true_count = mask.sum()
+                    # Correct predictions of this class
+                    correct_count = (all_trading_preds[mask] == label).sum()
+                    confusion_matrix[name] = {
+                        'predicted': correct_count,
+                        'true': true_count
+                    }
+                    
+                    # Accuracy: correct predictions / total instances of this class
+                    class_acc = correct_count / true_count
+                    result[f'trading_acc_{name.lower()}'] = class_acc
+                    
+                    # Precision: correct predictions of this class / total predictions of this class
+                    pred_mask = all_trading_preds == label
+                    if pred_mask.sum() > 0:
+                        precision = (all_trading_preds[pred_mask] == all_trading_targets[pred_mask]).sum() / pred_mask.sum()
+                        result[f'trading_prec_{name.lower()}'] = precision
+                    else:
+                        result[f'trading_prec_{name.lower()}'] = 0.0
+                    
+                    # Recall: same as accuracy for this class
+                    result[f'trading_recall_{name.lower()}'] = class_acc
+                else:
+                    confusion_matrix[name] = {'predicted': 0, 'true': 0}
+                    result[f'trading_acc_{name.lower()}'] = 0.0
+                    result[f'trading_prec_{name.lower()}'] = 0.0
+                    result[f'trading_recall_{name.lower()}'] = 0.0
             
-            predicted_tokens = np.argmax(all_probs_concat, axis=1)
-            actual_tokens = all_targets_concat
+            result['confusion_matrix'] = confusion_matrix
             
-            neutral_token = num_classes // 2
-            
-            # Quick threshold calibration (no detailed logging)
-            buy_percentile = 95
-            sell_percentile = 5
-            best_buy_threshold = np.percentile(predicted_tokens, buy_percentile)
-            best_sell_threshold = np.percentile(predicted_tokens, sell_percentile)
-            
-            # Calculate precision
-            predicted_buy_mask = predicted_tokens > best_buy_threshold
-            buy_signal_count = predicted_buy_mask.sum()
-            if buy_signal_count > 0:
-                actual_positives = (actual_tokens[predicted_buy_mask] > neutral_token).sum()
-                best_buy_precision = actual_positives / buy_signal_count
-            else:
-                best_buy_precision = 0.0
-            
-            predicted_sell_mask = predicted_tokens < best_sell_threshold
-            sell_signal_count = predicted_sell_mask.sum()
-            if sell_signal_count > 0:
-                actual_negatives = (actual_tokens[predicted_sell_mask] < neutral_token).sum()
-                best_sell_precision = actual_negatives / sell_signal_count
-            else:
-                best_sell_precision = 0.0
-            
-            return avg_loss, avg_acc, max(best_buy_precision, best_sell_precision), best_buy_threshold, best_sell_threshold
+            # Validation check: ensure all label counts add up
+            total_true_count = sum(cm['true'] for cm in confusion_matrix.values())
+            expected_total = total_trading_samples
+            assert total_true_count == expected_total, \
+                f"Trading label validation failed: {total_true_count} != {expected_total}"
+        
+        return result
+

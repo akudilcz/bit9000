@@ -105,8 +105,8 @@ class TokenizeBlock(PipelineBlock):
         bin_edges = self._fit_bin_edges(train_df, coins)
         
         # Log bin edges info
-        vocab_size = self.config['tokenization']['vocab_size']
-        logger.info(f"  Using {vocab_size} bins (0-{vocab_size-1})")
+        data_bins = self.config['tokenization'].get('data_bins', 21)
+        logger.info(f"  Using {data_bins} bins (0-{data_bins-1}) for data tokens")
         for coin in coins:
             if coin in bin_edges:
                 price_edges = bin_edges[coin]['price']
@@ -146,16 +146,17 @@ class TokenizeBlock(PipelineBlock):
         
         # Verify distribution on training data
         token_distribution = self._compute_distribution(train_tokens, val_tokens)
+        data_bins = self.config['tokenization'].get('data_bins', 21)
         logger.info("\n  Token distribution (showing first 10 bins):")
-        for token in range(min(10, vocab_size)):
+        for token in range(min(10, data_bins)):
             train_pct = token_distribution.get(token, {}).get('train', 0) * 100
             val_pct = token_distribution.get(token, {}).get('val', 0) * 100
             logger.info(f"    {token:3d}: Train={train_pct:5.1f}%, Val={val_pct:5.1f}%")
         
         # Show distribution stats
-        train_ratios = [token_distribution.get(i, {}).get('train', 0) for i in range(vocab_size)]
-        val_ratios = [token_distribution.get(i, {}).get('val', 0) for i in range(vocab_size)]
-        expected_ratio = 1.0 / vocab_size
+        train_ratios = [token_distribution.get(i, {}).get('train', 0) for i in range(data_bins)]
+        val_ratios = [token_distribution.get(i, {}).get('val', 0) for i in range(data_bins)]
+        expected_ratio = 1.0 / data_bins
         
         logger.info(f"\n  Distribution stats:")
         logger.info(f"    Expected uniform ratio: {expected_ratio:.3%}")
@@ -204,7 +205,8 @@ class TokenizeBlock(PipelineBlock):
         logger.info(f"  Saved bin edges: {bin_edges_path}")
         
         # Create token distribution visualization
-        self._plot_token_distribution(token_distribution, vocab_size, block_dir)
+        data_bins = self.config['tokenization'].get('data_bins', 21)
+        self._plot_token_distribution(token_distribution, data_bins, block_dir)
         
         # Create artifact
         num_channels = 9  # price + volume + rsi + macd + bb_position + ema_9 + ema_21 + ema_50 + ema_ratio
@@ -317,7 +319,7 @@ class TokenizeBlock(PipelineBlock):
         - 17 indicator channels: Direct values (RSI, MACD, BB Position, EMA-9, EMA-21, EMA-50, EMA-Ratio,
                                  Stochastic, Williams %R, ATR, ADX, OBV, Volume ROC, VWAP,
                                  Price Momentum, Support/Resistance, Volatility Regime)
-        - For each channel, find 255 quantile thresholds to create 256 bins
+        - For each channel, find quantile thresholds to create bins
         
         Args:
             train_df: Training data with COIN_close, COIN_volume, and all indicator columns
@@ -326,9 +328,10 @@ class TokenizeBlock(PipelineBlock):
         Returns:
             Dictionary {coin: {price: edges, volume: edges, indicator1: edges, ...indicator17: edges}}
         """
-        vocab_size = self.config['tokenization']['vocab_size']  # 256
-        # Generate percentiles at runtime: evenly spaced from 0.4 to 99.6 (255 edges for 256 bins)
-        percentiles = np.linspace(0.4, 99.6, vocab_size - 1)
+        # Get number of data bins from config (21 for data tokens 0-20)
+        data_bins = self.config['tokenization'].get('data_bins', 21)
+        # Generate percentiles: evenly spaced to create equal-sized bins (20 edges for 21 bins)
+        percentiles = np.linspace(5, 95, data_bins - 1)
         
         bin_edges = {}
         indicators = ['rsi', 'macd', 'bb_position', 'ema_9', 'ema_21', 'ema_50', 'ema_ratio',
@@ -475,7 +478,7 @@ class TokenizeBlock(PipelineBlock):
         Returns:
             Dictionary {token: {train: ratio, val: ratio}}
         """
-        vocab_size = self.config['tokenization']['vocab_size']
+        data_bins = self.config['tokenization'].get('data_bins', 21)
         
         def get_ratios(tokens_df):
             all_tokens = tokens_df.values.flatten()
@@ -483,13 +486,13 @@ class TokenizeBlock(PipelineBlock):
             
             total = len(valid_tokens)
             if total == 0:
-                return {i: 0.0 for i in range(vocab_size)}
+                return {i: 0.0 for i in range(data_bins)}
             
             unique, counts = np.unique(valid_tokens, return_counts=True)
             ratios = {int(token): float(count / total) for token, count in zip(unique, counts)}
             
-            # Ensure all tokens present (0-255)
-            for token in range(vocab_size):
+            # Ensure all tokens present (0 to data_bins-1)
+            for token in range(data_bins):
                 if token not in ratios:
                     ratios[token] = 0.0
             
@@ -498,10 +501,10 @@ class TokenizeBlock(PipelineBlock):
         train_ratios = get_ratios(train_tokens_df)
         val_ratios = get_ratios(val_tokens_df)
         
-        # Return distribution for all 256 bins
+        # Return distribution for all data bins
         return {
             i: {'train': train_ratios[i], 'val': val_ratios[i]}
-            for i in range(vocab_size)
+            for i in range(data_bins)
         }
     
     def _plot_token_distribution(self, token_distribution: Dict[int, Dict[str, float]], 

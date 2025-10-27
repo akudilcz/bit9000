@@ -114,15 +114,15 @@ class SequenceBlock(PipelineBlock):
         
         # Create sequences
         logger.info("\n[2/3] Creating sequences...")
-        train_X, train_y = self._create_sequences(
+        train_X, train_y, train_trading = self._create_sequences(
             train_tokens, input_length, output_length, target_coin, num_channels, prediction_horizon
         )
-        val_X, val_y = self._create_sequences(
+        val_X, val_y, val_trading = self._create_sequences(
             val_tokens, input_length, output_length, target_coin, num_channels, prediction_horizon
         )
         
-        logger.info(f"  Train: X={train_X.shape}, y={train_y.shape}")
-        logger.info(f"  Val: X={val_X.shape}, y={val_y.shape}")
+        logger.info(f"  Train: X={train_X.shape}, y={train_y.shape}, trading={train_trading.shape}")
+        logger.info(f"  Val: X={val_X.shape}, y={val_y.shape}, trading={val_trading.shape}")
         
         # Save as PyTorch tensors
         logger.info("\n[3/3] Saving tensors...")
@@ -130,21 +130,27 @@ class SequenceBlock(PipelineBlock):
         
         train_X_path = block_dir / "train_X.pt"
         train_y_path = block_dir / "train_y.pt"
+        train_trading_path = block_dir / "train_trading.pt"
         val_X_path = block_dir / "val_X.pt"
         val_y_path = block_dir / "val_y.pt"
+        val_trading_path = block_dir / "val_trading.pt"
         
         torch.save(torch.tensor(train_X, dtype=torch.long), train_X_path)
         torch.save(torch.tensor(train_y, dtype=torch.long), train_y_path)
+        torch.save(torch.tensor(train_trading, dtype=torch.long), train_trading_path)
         torch.save(torch.tensor(val_X, dtype=torch.long), val_X_path)
         torch.save(torch.tensor(val_y, dtype=torch.long), val_y_path)
+        torch.save(torch.tensor(val_trading, dtype=torch.long), val_trading_path)
         
         logger.info(f"  Saved train_X.pt: {train_X.shape}")
         logger.info(f"  Saved train_y.pt: {train_y.shape}")
+        logger.info(f"  Saved train_trading.pt: {train_trading.shape}")
         logger.info(f"  Saved val_X.pt: {val_X.shape}")
         logger.info(f"  Saved val_y.pt: {val_y.shape}")
+        logger.info(f"  Saved val_trading.pt: {val_trading.shape}")
         
-        # Extract num_coins from shape
-        num_coins = train_X.shape[2]
+        # Extract num_coins from config (not from shape since it's now flattened)
+        num_coins = len(self.config['data']['coins'])
         
         # Create artifact
         artifact = SequencesArtifact(
@@ -188,28 +194,32 @@ class SequenceBlock(PipelineBlock):
                          output_length: int, target_coin: str, num_channels: int,
                          prediction_horizon: int = 1) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Create rolling window sequences with 9-channel support
+        Create rolling window sequences - DECODER-ONLY VERSION
         
-        For each valid position i:
-        - X[i] = tokens[i:i+input_length, all_coins, all_channels]
-          Shape: (input_length, num_coins, num_channels)
-        - y[i] = tokens[i+input_length:i+input_length+output_length, target_coin_price]
-          Shape: (output_length,) - price only
+        Flattens tokens into 1D sequences with special tokens marking timesteps and coins.
+        Each sample is: [T0] [BTC] btc_data... [ETH] eth_data... ... [T1] ...
+        
+        For next-token prediction:
+        - X[i] = flattened_sequence[:-1]  (input: all but last token)
+        - y[i] = flattened_sequence[1:]   (target: shifted by 1)
         
         Args:
             tokens_df: DataFrame with token values (timesteps × coin_channels)
-                      Columns like: BTC_price, BTC_volume, BTC_rsi, BTC_macd, BTC_bb_position, 
-                                    BTC_ema_9, BTC_ema_21, BTC_ema_50, BTC_ema_ratio, ...
             input_length: Number of input timesteps (48)
-            output_length: Number of output timesteps (8)
-            target_coin: Coin to predict (e.g., 'XRP')
-            num_channels: Number of channels (9 = price + volume + rsi + macd + bb_position + ema_9 + ema_21 + ema_50 + ema_ratio)
+            output_length: Not used in decoder-only version
+            target_coin: Not used in decoder-only version
+            num_channels: Number of channels per coin (19)
             
         Returns:
             (X, y) tuple of numpy arrays
-            X shape: (num_samples, input_length, num_coins, num_channels)
-            y shape: (num_samples, output_length)
+            X shape: (num_samples, seq_len-1) - input sequences
+            y shape: (num_samples, seq_len-1) - target sequences (shifted by 1)
         """
+        # Get special token configuration
+        special_tokens_cfg = self.config.get('special_tokens', {})
+        TIMESTEP_TOKEN_START = special_tokens_cfg['timestep_range'][0]  # 21
+        COIN_TOKEN_START = special_tokens_cfg['coin_range'][0]  # 69
+        
         # Extract coin names from columns - look for coins from config
         coins_from_config = self.config['data']['coins']
         all_columns = list(tokens_df.columns)
@@ -255,57 +265,190 @@ class SequenceBlock(PipelineBlock):
             tokens_array[:, coin_idx, 17] = tokens_df[f"{coin}_support_resistance"].values
             tokens_array[:, coin_idx, 18] = tokens_df[f"{coin}_volatility_regime"].values
         
-        # Find target coin index for output
-        target_coin_idx = coin_names.index(target_coin)
-        
         # Calculate number of valid windows
-        # Need: input_length + (prediction_horizon - 1) steps to look prediction_horizon ahead
-        window_total = input_length + prediction_horizon - 1
-        num_samples = T - window_total
+        # Each window is input_length timesteps
+        # Stride controls overlap: 1 = every timestep, input_length = non-overlapping
+        stride = self.config['sequences'].get('sequence_stride', 1)
+        num_samples = (T - input_length) // stride + 1
         
         if num_samples <= 0:
             raise ValueError(
-                f"Not enough data for sequences. Need {window_total} timesteps, "
+                f"Not enough data for sequences. Need {input_length} timesteps, "
                 f"have {T}. Increase data range or decrease window sizes."
             )
         
+        # Calculate sequence length per sample
+        # Per timestep: 1 timestep token + num_coins × (1 coin token + num_channels data tokens)
+        tokens_per_timestep = 1 + num_coins * (1 + num_channels)
+        seq_len = input_length * tokens_per_timestep
+        
         logger.info(f"    Creating {num_samples:,} windows from {T} timesteps...")
-        logger.info(f"    Input: {input_length} steps × {num_coins} coins × {num_channels} channels")
-        logger.info(f"    Output: Single-horizon prediction {prediction_horizon}h ahead for {target_coin} price")
+        logger.info(f"    Window stride: {stride} timesteps (overlap={input_length-stride} timesteps)")
+        logger.info(f"    Flattened sequence structure:")
+        logger.info(f"      - Tokens per timestep: {tokens_per_timestep} (1 timestep + {num_coins}×{1+num_channels} coins)")
+        logger.info(f"      - Total sequence length: {seq_len} tokens ({input_length} timesteps)")
+        logger.info(f"      - Order: [T0] [BTC] data... [ETH] data... [T1] [BTC] ...")
         
-        # Pre-allocate arrays
-        X = np.zeros((num_samples, input_length, num_coins, num_channels), dtype=np.int64)
+        # Pre-allocate arrays for flattened sequences
+        all_sequences = []
         
-        # Targets: single-horizon 8h ahead (binary BUY/NO-BUY)
-        y_1h = np.zeros(num_samples, dtype=np.int64)
-        # Current price token (at end of input window)
-        y_current = np.zeros(num_samples, dtype=np.int64)
-        
-        # Create windows using vectorized slicing
-        for i in range(num_samples):
-            # Input window: all coins, all channels (including target coin)
-            X[i] = tokens_array[i:i+input_length, :, :]
+        # Create flattened windows with stride
+        for i in range(0, T - input_length + 1, stride):
+            # Get window of tokens_array: (input_length, num_coins, num_channels)
+            window = tokens_array[i:i+input_length, :, :]
             
-            # Single-horizon output: predict at prediction_horizon hours after input window
-            y_1h[i] = tokens_array[i+input_length+prediction_horizon-1, target_coin_idx, 0]  # prediction_horizon hours ahead
-            # Current price at end of input window (for directional comparison)
-            y_current[i] = tokens_array[i+input_length-1, target_coin_idx, 0]  # current price
+            # Flatten with special tokens
+            sequence = self._flatten_with_special_tokens(
+                window, input_length, num_coins, num_channels,
+                TIMESTEP_TOKEN_START, COIN_TOKEN_START
+            )
+            
+            all_sequences.append(sequence)
         
-        # Single horizon array: (num_samples,)
-        y_single = y_1h
+        # Convert to numpy array: (num_samples, seq_len)
+        all_sequences = np.array(all_sequences, dtype=np.int64)
         
-        # Use raw token as target (256-class token prediction)
-        y = y_1h
+        # Create training pairs for next-token prediction
+        X = all_sequences[:, :-1]  # Input: all but last token
+        y = all_sequences[:, 1:]   # Target: shifted by 1
         
-        # Log token distribution
-        logger.info(f"    {prediction_horizon}h horizon - 256-class token prediction:")
-        logger.info(f"      Min token: {y.min()}, Max token: {y.max()}, Mean token: {y.astype(np.float32).mean():.1f}")
-        unique_tokens = len(np.unique(y))
-        logger.info(f"      Unique tokens in targets: {unique_tokens}/256")
+        logger.info(f"    Next-token prediction:")
+        logger.info(f"      Input X: {X.shape} (each position predicts next token)")
+        logger.info(f"      Target y: {y.shape} (shifted by 1)")
+        logger.info(f"      Token range: data=[0-20], timestep=[21-68], coin=[69-78]")
+        
+        # Create training pairs with stride of 201 tokens (1 hour)
+        # Each training pair predicts the next hour of data (201 tokens = 1 timestep for all 10 coins)
+        stride_tokens = 201  # 1 timestep token + 10 coins × 20 (1 coin token + 19 data channels)
+        X = all_sequences[:, :-stride_tokens]  # Input: all but last 201 tokens (1 hour)
+        y = all_sequences[:, stride_tokens:]    # Target: shifted by 201 tokens (predict next hour)
+        
+        logger.info(f"    Next-hour prediction (stride={stride_tokens} tokens):")
+        logger.info(f"      Input X: {X.shape} (input sequences)")
+        logger.info(f"      Target y: {y.shape} (predict next hour for all coins)")
+        logger.info(f"      Each target predicts {stride_tokens} tokens = 1 hour of data")
+        
+        # Generate trading labels (BUY/HOLD/SELL) based on future XRP price
+        logger.info(f"    Generating trading labels (BUY/HOLD/SELL)...")
+        trading_labels = self._generate_trading_labels(
+            tokens_array, coin_names, target_coin, input_length, num_samples, stride
+        )
+        logger.info(f"      Trading labels: {trading_labels.shape}")
+        
+        # Log distribution
+        unique, counts = np.unique(trading_labels, return_counts=True)
+        label_names = {0: 'BUY', 1: 'HOLD', 2: 'SELL'}
+        for label, count in zip(unique, counts):
+            pct = 100.0 * count / len(trading_labels)
+            logger.info(f"        {label_names.get(label, label)}: {count} ({pct:.1f}%)")
         
         # Verify no NaNs
         if np.isnan(X).any() or np.isnan(y).any():
             raise ValueError("NaN values detected in sequences!")
         
-        return X, y
+        return X, y, trading_labels
+    
+    def _flatten_with_special_tokens(self, tokens_3d: np.ndarray, timesteps: int, 
+                                    coins: int, channels: int,
+                                    timestep_token_start: int, 
+                                    coin_token_start: int) -> np.ndarray:
+        """
+        Flatten 3D tokens (T, C, Ch) to 1D with special tokens.
+        
+        Structure: [T0] [BTC] btc_ch0 btc_ch1 ... [ETH] eth_ch0 ... [T1] ...
+        
+        Args:
+            tokens_3d: (T, C, Ch) numpy array of data tokens
+            timesteps: Number of timesteps (T)
+            coins: Number of coins (C)
+            channels: Number of channels per coin (Ch)
+            timestep_token_start: Start index for timestep tokens (21)
+            coin_token_start: Start index for coin tokens (69)
+            
+        Returns:
+            1D sequence with special tokens
+        """
+        sequence = []
+        
+        for t in range(timesteps):
+            # Add timestep token
+            sequence.append(timestep_token_start + t)
+            
+            # Add all coins for this timestep
+            for c in range(coins):
+                # Add coin token
+                sequence.append(coin_token_start + c)
+                
+                # Add all channel data tokens for this coin
+                for ch in range(channels):
+                    sequence.append(int(tokens_3d[t, c, ch]))
+        
+        return np.array(sequence, dtype=np.int64)
+    
+    def _generate_trading_labels(self, tokens_array: np.ndarray, coin_names: list,
+                                 target_coin: str, input_length: int, 
+                                 num_samples: int, stride: int) -> np.ndarray:
+        """
+        Generate trading labels (BUY/HOLD/SELL) based on future price movement.
+        
+        Strategy: 
+        - Compare XRP price 8 hours after the window ends vs current price
+        - Top 5% price increases → BUY (0)
+        - Bottom 5% price decreases → SELL (2)
+        - Middle 90% → HOLD (1)
+        
+        Args:
+            tokens_array: (T, C, Ch) array of all tokens
+            coin_names: List of coin names
+            target_coin: Target coin for trading (e.g. 'XRP')
+            input_length: Input window length (48)
+            num_samples: Number of samples
+            stride: Stride between samples
+            
+        Returns:
+            trading_labels: (num_samples,) array of labels {0: BUY, 1: HOLD, 2: SELL}
+        """
+        target_coin_idx = coin_names.index(target_coin)
+        future_horizon = 8  # Look 8 hours ahead
+        T = tokens_array.shape[0]
+        
+        # Extract price changes for all valid samples
+        price_changes = []
+        valid_indices = []
+        
+        for i, start_idx in enumerate(range(0, T - input_length + 1, stride)):
+            if i >= num_samples:
+                break
+            
+            # Current price: last price in the input window
+            current_idx = start_idx + input_length - 1
+            # Future price: 8 hours after window ends
+            future_idx = start_idx + input_length + future_horizon - 1
+            
+            # Check if future index is valid
+            if future_idx < T:
+                current_price_token = tokens_array[current_idx, target_coin_idx, 0]
+                future_price_token = tokens_array[future_idx, target_coin_idx, 0]
+                
+                # Price change in token space (-20 to +20)
+                change = int(future_price_token) - int(current_price_token)
+                price_changes.append(change)
+                valid_indices.append(i)
+            else:
+                # Not enough future data - default to HOLD
+                price_changes.append(0)
+                valid_indices.append(i)
+        
+        price_changes = np.array(price_changes)
+        
+        # Calculate percentile thresholds for 5% BUY and 5% SELL
+        buy_threshold = np.percentile(price_changes, 95)  # Top 5%
+        sell_threshold = np.percentile(price_changes, 5)  # Bottom 5%
+        
+        # Assign labels
+        trading_labels = np.ones(len(price_changes), dtype=np.int64)  # Default: HOLD (1)
+        trading_labels[price_changes >= buy_threshold] = 0  # BUY
+        trading_labels[price_changes <= sell_threshold] = 2  # SELL
+        
+        return trading_labels
 

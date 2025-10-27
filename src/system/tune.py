@@ -25,7 +25,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from src.model import create_model
 from src.utils.logger import get_logger
-from src.model.trainer import SmoothOrdinalLoss
 
 logger = get_logger(__name__)
 
@@ -196,16 +195,8 @@ class HyperparameterTuner:
                 weight_decay=params["weight_decay"],
             )
 
-            # Loss function - use config loss_type and num_classes
-            loss_type = trial_config['training'].get('loss_type', 'cross_entropy')
-            num_classes = trial_config['model'].get('num_classes', 3)
-            
-            if loss_type == 'smooth_ordinal':
-                sigma = trial_config['training'].get('ordinal_sigma', 5.0)
-                criterion = SmoothOrdinalLoss(num_classes=num_classes, sigma=sigma)
-            else:
-                # Use cross entropy with correct number of classes
-                criterion = nn.CrossEntropyLoss(label_smoothing=params["label_smoothing"])
+            # Loss function - use standard cross entropy
+            criterion = nn.CrossEntropyLoss(label_smoothing=params["label_smoothing"])
 
             # Simple training loop (no full trainer for speed)
             best_val_loss = float('inf')  # Initialize to infinity for loss minimization
