@@ -1,9 +1,9 @@
-"""CryptoTransformerV4 - Multi-Horizon with BTC→XRP Attention and Time Features
+"""CryptoTransformerV4 - Multi-Horizon with BTC→XRP Attention
 
 Key Improvements over V3:
 1. BTC→XRP Dedicated Attention: Explicit pathway since BTC leads altcoins
 2. Multi-Horizon Prediction: Simultaneously predict 1h, 2h, 4h, 8h ahead
-3. Time-based Features: Hour of day, day of week, sequence position embeddings
+3. Time-based Features: Hour of day, day of week included as data channels
 4. Improved representation learning through auxiliary prediction tasks
 
 Architecture:
@@ -11,9 +11,8 @@ Architecture:
 - BTC Encoder: Dedicated pathway for BTC features
 - XRP Decoder: Attends to both shared encoder + BTC encoder
 - Multi-Horizon Heads: 4 prediction heads for different time horizons
-- Time Embeddings: Cyclical encoding of hour/day patterns
 
-Input:  (batch, seq_len, num_coins, num_channels) + time_features
+Input:  (batch, seq_len, num_coins, num_channels) where channels include time features
 Output: dict with 'horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h'
 """
 
@@ -60,53 +59,13 @@ class SinusoidalPositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class CyclicalTimeEncoding(nn.Module):
-    """Encode cyclical time features (hour, day of week) using sin/cos"""
-    
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.d_model = d_model
-        
-        # Project cyclical features to d_model
-        self.time_projection = nn.Linear(4, self.d_model)  # 2 for hour + 2 for day
-        
-    def forward(self, timestamps: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            timestamps: (batch, seq_len) - unix timestamps or datetime indices
-            
-        Returns:
-            time_embeddings: (batch, seq_len, self.d_model)
-        """
-        # For now, we'll compute hour and day from the timestamp
-        # Assuming timestamps are in hours since epoch (modify as needed)
-        
-        # Extract hour of day (0-23)
-        hour = (timestamps % 24).float()
-        hour_sin = torch.sin(2 * math.pi * hour / 24)
-        hour_cos = torch.cos(2 * math.pi * hour / 24)
-        
-        # Extract day of week (0-6)
-        day = ((timestamps // 24) % 7).float()
-        day_sin = torch.sin(2 * math.pi * day / 7)
-        day_cos = torch.cos(2 * math.pi * day / 7)
-        
-        # Stack: (batch, seq_len, 4)
-        cyclical_features = torch.stack([hour_sin, hour_cos, day_sin, day_cos], dim=-1)
-        
-        # Project to d_model
-        time_emb = self.time_projection(cyclical_features)  # (batch, seq_len, self.d_model)
-        
-        return time_emb
-
-
 class CryptoTransformerV4(nn.Module):
-    """Multi-Horizon Transformer with BTC→XRP attention and time features
+    """Multi-Horizon Transformer with BTC→XRP attention
     
     Key Features:
     - Dedicated BTC encoder (since BTC leads the market)
     - Multi-horizon prediction heads (1h, 2h, 4h, 8h)
-    - Time-based features (hour, day, sequence position)
+    - Time features embedded as data channels (hour, day_of_week)
     - Cross-attention from XRP decoder to BTC features
     """
     
@@ -147,7 +106,7 @@ class CryptoTransformerV4(nn.Module):
         # Coin-specific embeddings
         self.coin_embedding = nn.Embedding(self.num_coins, self.coin_embedding_dim)
         
-        # Token embeddings for configurable channels (price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio)
+        # Token embeddings for configurable channels (price, volume, indicators, time features)
         # Use smaller embedding dimensions that sum to d_model when combined with coin embedding
         # Ensure we don't lose information by using proper division
         total_channel_dim = self.d_model - self.coin_embedding_dim
@@ -174,8 +133,7 @@ class CryptoTransformerV4(nn.Module):
             nn.Dropout(self.dropout_rate)
         )
         
-        # Time-based feature encoding
-        self.time_encoding = CyclicalTimeEncoding(self.d_model)
+        # Positional encoding only (time features are in the data)
         self.position_encoding = SinusoidalPositionalEncoding(self.d_model, self.dropout_rate)
         
         # Shared encoder: process all coins
@@ -252,7 +210,7 @@ class CryptoTransformerV4(nn.Module):
         logger.info(f"  d_model: {self.d_model}, nhead: {self.nhead}, dim_ff: {self.dim_feedforward}")
         logger.info(f"  Prediction head: single-horizon (256-class token prediction)")
         logger.info(f"  BTC→XRP dedicated attention pathway enabled")
-        logger.info(f"  Time features: hour, day of week, sequence position")
+        logger.info(f"  Time features included as data channels (hour, day_of_week)")
     
     def _make_prediction_head(self, d_model: int, num_classes: int, dropout: float) -> nn.Module:
         """Create a prediction head for one time horizon"""
@@ -297,10 +255,11 @@ class CryptoTransformerV4(nn.Module):
             # Flatten to (batch, seq_len * num_coins, num_channels)
             x_flat = x.reshape(B, L * C, Ch)
             
-            # Coin indices
+            # Coin indices: [coin0, coin1, ..., coinN, coin0, coin1, ..., coinN, ...]
+            # Shape should be (B, L*C) where the pattern [0,1,2,...,C-1] repeats L times
             if coin_indices is None:
-                coin_ids = torch.arange(C, device=x.device).repeat(L)
-                coin_indices = coin_ids.unsqueeze(0).expand(B, -1)
+                coin_ids = torch.arange(C, device=x.device).repeat(L)  # [0,1,2,...,C-1, 0,1,2,...,C-1, ...]
+                coin_indices = coin_ids.unsqueeze(0).expand(B, -1)  # (B, L*C)
         else:
             # Single coin input
             B, L, Ch = x.shape
@@ -310,7 +269,6 @@ class CryptoTransformerV4(nn.Module):
                 coin_indices = torch.zeros(B, L, dtype=torch.long, device=x.device)
         
         # Embed channels
-        # Handle configurable channels: price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio
         embedded_channels = []
         for i in range(Ch):  # Only iterate over actual channels present
             if i < len(self.channel_embeddings):  # Safety check
@@ -333,14 +291,12 @@ class CryptoTransformerV4(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        timestamps: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass with multi-horizon prediction
         
         Args:
-            x: (batch, seq_len, num_coins, num_channels) - input tokens
-            timestamps: (batch, seq_len) - optional timestamps for time features
+            x: (batch, seq_len, num_coins, num_channels) - input tokens (includes time features as channels)
             
         Returns:
             dict with keys: 'horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h'
@@ -350,16 +306,6 @@ class CryptoTransformerV4(nn.Module):
         
         # 1. Embed all coins
         encoder_input = self._embed_sequence(x)  # (B, L*C, d_model)
-        
-        # Reshape for temporal processing: (B, L*C, d_model)
-        # Add time features if provided
-        if timestamps is not None:
-            # Time encoding per timestep
-            time_emb = self.time_encoding(timestamps)  # (B, L, d_model)
-            # Expand to all coins: repeat for each coin
-            time_emb = time_emb.unsqueeze(2).repeat(1, 1, C, 1)  # (B, L, C, d_model)
-            time_emb = time_emb.reshape(B, L * C, self.d_model)  # (B, L*C, d_model)
-            encoder_input = encoder_input + time_emb
         
         # Add positional encoding
         encoder_input = self.position_encoding(encoder_input)
@@ -401,8 +347,9 @@ class CryptoTransformerV4(nn.Module):
         # 7. Multi-horizon predictions
         outputs = {}
         for horizon_name, head in self.horizon_heads.items():
+            logits = head(final_repr)  # (B, num_classes)
             outputs[horizon_name] = {
-                'logits': head(final_repr)  # (B, num_classes)
+                'logits': logits
             }
         
         return outputs
@@ -410,7 +357,6 @@ class CryptoTransformerV4(nn.Module):
     def generate(
         self,
         x: torch.Tensor,
-        timestamps: Optional[torch.Tensor] = None,
         temperature: float = 1.0
     ) -> Dict[str, torch.Tensor]:
         """
@@ -418,14 +364,13 @@ class CryptoTransformerV4(nn.Module):
         
         Args:
             x: (batch, seq_len, num_coins, num_channels)
-            timestamps: Optional timestamps
             temperature: Sampling temperature
             
         Returns:
             dict with 'horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h'
             Each contains predicted token ID
         """
-        outputs = self.forward(x, timestamps)
+        outputs = self.forward(x)
         
         predictions = {}
         for horizon, output in outputs.items():

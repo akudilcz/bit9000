@@ -49,6 +49,14 @@ class TrainedModelArtifact:
 class TrainBlock(PipelineBlock):
     """Train transformer model on token sequences"""
     
+    def __init__(self, config: dict, artifact_io):
+        super().__init__(config, artifact_io)
+        self.diagnostics = {
+            'batches': [],
+            'epochs': [],
+            'model_outputs': []
+        }
+    
     def run(self, sequences_artifact=None):
         """Train model on sequences"""
         logger.info("="*70)
@@ -102,9 +110,13 @@ class TrainBlock(PipelineBlock):
         logger.info(f"  Using 256-class token prediction")
         
         # Loss and optimizer
-        label_smoothing = train_config.get('label_smoothing', 0.0)
-        criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-        logger.info(f"  Using Standard CE Loss (label_smoothing={label_smoothing})")
+        # Use ordinal loss to respect that tokens represent ordered returns
+        from src.utils.ordinal_loss import SoftOrdinalCrossEntropyLoss
+        label_smoothing = train_config.get('label_smoothing', 0.1)
+        sigma = train_config.get('ordinal_sigma', 8.0)  # Controls spread of soft targets
+        criterion = SoftOrdinalCrossEntropyLoss(num_classes=256, sigma=sigma, label_smoothing=label_smoothing)
+        logger.info(f"  Using Soft Ordinal CE Loss (sigma={sigma}, label_smoothing={label_smoothing})")
+        logger.info(f"  This respects that nearby tokens (returns) are similar")
         optimizer = optim.Adam(
             model.parameters(),
             lr=learning_rate,
@@ -112,14 +124,17 @@ class TrainBlock(PipelineBlock):
         )
         
         # Learning rate scheduler with warmup
-        warmup_epochs = train_config.get('warmup_epochs', 3)
+        warmup_epochs = min(train_config.get('warmup_epochs', 3), max(1, epochs - 1))  # Ensure warmup < total epochs
         warmup_start_lr = train_config.get('warmup_start_lr', 1e-6)
         
         def warmup_lr(epoch):
             if epoch < warmup_epochs:
                 return warmup_start_lr + (learning_rate - warmup_start_lr) * (epoch / warmup_epochs)
             else:
-                progress = (epoch - warmup_epochs) / (epochs - warmup_epochs)
+                remaining_epochs = epochs - warmup_epochs
+                if remaining_epochs <= 0:
+                    return learning_rate
+                progress = (epoch - warmup_epochs) / remaining_epochs
                 return learning_rate * (0.5 + 0.5 * math.cos(math.pi * progress))
         
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda e: warmup_lr(e) / learning_rate)
@@ -156,6 +171,19 @@ class TrainBlock(PipelineBlock):
             history['train_acc'].append(train_acc)
             history['val_loss'].append(val_loss)
             history['val_acc'].append(val_acc)
+            
+            # Record epoch-level diagnostics
+            self.diagnostics['epochs'].append({
+                'epoch': epoch + 1,
+                'train_loss': train_loss,
+                'train_acc': train_acc,
+                'val_loss': val_loss,
+                'val_acc': val_acc,
+                'avg_precision': avg_precision,
+                'threshold_buy': threshold_buy,
+                'threshold_sell': threshold_sell,
+                'learning_rate': optimizer.param_groups[0]['lr']
+            })
             
             # Log progress
             logger.info(
@@ -209,6 +237,12 @@ class TrainBlock(PipelineBlock):
             json.dump(history, f, indent=2)
         logger.info(f"  Saved history: {history_path}")
         
+        # Save diagnostics for post-training analysis
+        diagnostics_path = block_dir / "diagnostics.json"
+        with open(diagnostics_path, 'w') as f:
+            json.dump(self.diagnostics, f, indent=2)
+        logger.info(f"  Saved diagnostics: {diagnostics_path}")
+        
         # Create artifact
         metadata = self.create_metadata(
             upstream_inputs={"sequences_artifact": str(sequences_artifact.train_X_path.parent)}
@@ -245,7 +279,7 @@ class TrainBlock(PipelineBlock):
         
         pbar = tqdm(data_loader, desc='Training', leave=False, ncols=100)
         
-        for X_batch, y_batch in pbar:
+        for batch_idx, (X_batch, y_batch) in enumerate(pbar):
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
             
@@ -267,6 +301,32 @@ class TrainBlock(PipelineBlock):
             predictions = torch.argmax(logits, dim=-1)
             batch_correct = (predictions == y_batch).sum().item()
             batch_samples = y_batch.numel()
+            
+            # Collect diagnostics every 50 batches
+            if batch_idx % 50 == 0:
+                with torch.no_grad():
+                    self.diagnostics['batches'].append({
+                        'epoch': len(self.diagnostics['epochs']),
+                        'batch': batch_idx,
+                        'loss': loss.item(),
+                        'acc': batch_correct/batch_samples,
+                        'logits_stats': {
+                            'min': float(logits.min()),
+                            'max': float(logits.max()),
+                            'mean': float(logits.mean()),
+                            'std': float(logits.std())
+                        },
+                        'predictions': {
+                            'unique_count': len(torch.unique(predictions)),
+                            'most_common': int(torch.mode(predictions)[0]),
+                            'pred_std': float(predictions.float().std())
+                        },
+                        'targets': {
+                            'unique_count': len(torch.unique(y_batch)),
+                            'mean': float(y_batch.float().mean()),
+                            'std': float(y_batch.float().std())
+                        }
+                    })
             
             # Backward pass with gradient clipping
             loss.backward()
@@ -352,7 +412,8 @@ class TrainBlock(PipelineBlock):
             # Enhanced logging with precision focus
             logger.info(f"    Val metrics: loss={avg_loss:.4f}, acc={avg_acc:.4f}, dist_err={avg_distance_error:.2f}")
             
-            # Calibrate thresholds based on token changes (not probabilities)
+            # Tokens represent log returns (already changes), not absolute prices
+            # Token 127 ≈ 0% return, token >127 = positive return, token <127 = negative return
             all_probs_concat = np.concatenate(all_probs, axis=0)  # (samples, 256)
             all_targets_concat = np.concatenate(all_targets, axis=0)  # (samples,)
             
@@ -360,76 +421,65 @@ class TrainBlock(PipelineBlock):
             predicted_tokens = np.argmax(all_probs_concat, axis=1)
             actual_tokens = all_targets_concat
             
-            # Calculate token changes (future - current, where current is middle of 48-hour window)
-            # In our case, we're predicting 1 hour ahead from the last token in sequence
-            token_changes = actual_tokens - predicted_tokens
-            
             # Target signal rate: 5%
             target_signal_rate = 0.05
-            target_count = int(len(token_changes) * target_signal_rate)
+            target_count = int(len(actual_tokens) * target_signal_rate)
+            neutral_token = 127  # Middle token represents ~0% return
+            
+            # Diagnostics: show token distribution
+            logger.info(f"    Actual return tokens - min: {actual_tokens.min():.1f}, max: {actual_tokens.max():.1f}, mean: {actual_tokens.mean():.1f}, std: {actual_tokens.std():.1f}")
+            logger.info(f"    Predicted return tokens - min: {predicted_tokens.min():.1f}, max: {predicted_tokens.max():.1f}, mean: {predicted_tokens.mean():.1f}, std: {predicted_tokens.std():.1f}")
+            logger.info(f"    Predicted unique tokens: {len(np.unique(predicted_tokens))}")
+            
+            # Show sample of first 5 predictions
+            logger.info(f"    Sample predictions (first 5):")
+            for i in range(min(5, len(predicted_tokens))):
+                pred_direction = "UP" if predicted_tokens[i] > neutral_token else ("DOWN" if predicted_tokens[i] < neutral_token else "FLAT")
+                actual_direction = "UP" if actual_tokens[i] > neutral_token else ("DOWN" if actual_tokens[i] < neutral_token else "FLAT")
+                logger.info(f"      [{i}] pred={predicted_tokens[i]:.0f} ({pred_direction}), actual={actual_tokens[i]:.0f} ({actual_direction})")
             
             logger.info(f"    Calibrating thresholds for ~{target_signal_rate*100:.0f}% signal rate ({target_count} samples)")
             
             # ========== CALIBRATE BUY THRESHOLD ==========
-            # BUY: token_change > buy_threshold (price goes up)
-            # Try thresholds and find one that gives ~5% positive signal rate
-            best_buy_threshold = 5
-            best_buy_precision = 0.0
-            buy_thresholds_to_try = list(range(1, 50, 2))  # 1, 3, 5, 7, ... 49
+            # Strategy: Find token threshold where predictions > threshold represent strong positive returns
+            # Select top 5% of predicted tokens as BUY signals
+            buy_percentile = 95  # Top 5% most positive predictions
+            best_buy_threshold = np.percentile(predicted_tokens, buy_percentile)
             
-            for threshold in buy_thresholds_to_try:
-                buy_signal_mask = token_changes > threshold
-                signal_count = buy_signal_mask.sum()
-                signal_rate = signal_count / len(token_changes)
-                
-                if signal_count > 0:
-                    # Precision: among flagged BUY samples, how many actually went up?
-                    actual_positive = (token_changes[buy_signal_mask] > 0).sum()
-                    buy_precision = actual_positive / signal_count
-                    
-                    # Prefer threshold closest to 5% rate
-                    rate_diff = abs(signal_rate - target_signal_rate)
-                    
-                    if signal_count >= target_count * 0.8 and signal_count <= target_count * 1.2:
-                        # Within acceptable range of 5%
-                        if buy_precision > best_buy_precision:
-                            best_buy_precision = buy_precision
-                            best_buy_threshold = threshold
+            # Calculate precision: among top 5% predicted positive returns, how many were ACTUALLY positive?
+            predicted_buy_mask = predicted_tokens > best_buy_threshold
+            buy_signal_count = predicted_buy_mask.sum()
+            buy_signal_rate = buy_signal_count / len(predicted_tokens)
             
-            buy_signal_mask = token_changes > best_buy_threshold
-            buy_signal_rate = buy_signal_mask.sum() / len(token_changes)
+            if buy_signal_count > 0:
+                # Actual positives: actual return token > neutral (127)
+                actual_positives = (actual_tokens[predicted_buy_mask] > neutral_token).sum()
+                best_buy_precision = actual_positives / buy_signal_count
+            else:
+                actual_positives = 0
+                best_buy_precision = 0.0
             
-            logger.info(f"    BUY: threshold={best_buy_threshold}, signal_rate={buy_signal_rate*100:.2f}%, precision={best_buy_precision*100:.2f}%")
+            logger.info(f"    BUY: token_threshold={best_buy_threshold:.1f}, signals={buy_signal_count} ({buy_signal_rate*100:.2f}%), correct={actual_positives}, precision={best_buy_precision*100:.2f}%")
             
             # ========== CALIBRATE SELL THRESHOLD ==========
-            # SELL: token_change < sell_threshold (price goes down)
-            # Try thresholds and find one that gives ~5% negative signal rate
-            best_sell_threshold = -5
-            best_sell_precision = 0.0
-            sell_thresholds_to_try = list(range(-1, -50, -2))  # -1, -3, -5, -7, ... -49
+            # Strategy: Find token threshold where predictions < threshold represent strong negative returns
+            # Select bottom 5% of predicted tokens as SELL signals
+            sell_percentile = 5  # Bottom 5% most negative predictions
+            best_sell_threshold = np.percentile(predicted_tokens, sell_percentile)
             
-            for threshold in sell_thresholds_to_try:
-                sell_signal_mask = token_changes < threshold
-                signal_count = sell_signal_mask.sum()
-                signal_rate = signal_count / len(token_changes)
-                
-                if signal_count > 0:
-                    # Precision: among flagged SELL samples, how many actually went down?
-                    actual_negative = (token_changes[sell_signal_mask] < 0).sum()
-                    sell_precision = actual_negative / signal_count
-                    
-                    # Prefer threshold closest to 5% rate
-                    rate_diff = abs(signal_rate - target_signal_rate)
-                    
-                    if signal_count >= target_count * 0.8 and signal_count <= target_count * 1.2:
-                        # Within acceptable range of 5%
-                        if sell_precision > best_sell_precision:
-                            best_sell_precision = sell_precision
-                            best_sell_threshold = threshold
+            # Calculate precision: among bottom 5% predicted negative returns, how many were ACTUALLY negative?
+            predicted_sell_mask = predicted_tokens < best_sell_threshold
+            sell_signal_count = predicted_sell_mask.sum()
+            sell_signal_rate = sell_signal_count / len(predicted_tokens)
             
-            sell_signal_mask = token_changes < best_sell_threshold
-            sell_signal_rate = sell_signal_mask.sum() / len(token_changes)
+            if sell_signal_count > 0:
+                # Actual negatives: actual return token < neutral (127)
+                actual_negatives = (actual_tokens[predicted_sell_mask] < neutral_token).sum()
+                best_sell_precision = actual_negatives / sell_signal_count
+            else:
+                actual_negatives = 0
+                best_sell_precision = 0.0
             
-            logger.info(f"    SELL: threshold={best_sell_threshold}, signal_rate={sell_signal_rate*100:.2f}%, precision={best_sell_precision*100:.2f}%")
+            logger.info(f"    SELL: token_threshold={best_sell_threshold:.1f}, signals={sell_signal_count} ({sell_signal_rate*100:.2f}%), correct={actual_negatives}, precision={best_sell_precision*100:.2f}%")
             
             return avg_loss, avg_acc, max(best_buy_precision, best_sell_precision), best_buy_threshold, best_sell_threshold

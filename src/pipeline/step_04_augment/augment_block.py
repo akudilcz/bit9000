@@ -13,6 +13,36 @@ logger = get_logger(__name__)
 
 class AugmentBlock(PipelineBlock):
     """Add technical indicators to split data"""
+    
+    def _add_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add time-based features (hour of day, day of week) for each coin
+        
+        Args:
+            df: DataFrame with timestamp index
+            
+        Returns:
+            DataFrame with time features added
+        """
+        # Extract time features from timestamp index
+        hour_of_day = df.index.hour  # 0-23
+        day_of_week = df.index.dayofweek  # 0=Monday, 6=Sunday
+        
+        # Normalize to 0-1 range for better tokenization
+        hour_normalized = hour_of_day / 23.0  # 0.0 to 1.0
+        day_normalized = day_of_week / 6.0  # 0.0 to 1.0
+        
+        # Get list of coins
+        coins = self.config['data']['coins']
+        
+        # Add time features for each coin (they're the same across all coins, but we keep them per-coin for consistency)
+        for coin in coins:
+            df[f'{coin}_hour'] = hour_normalized
+            df[f'{coin}_day_of_week'] = day_normalized
+        
+        logger.info(f"  Added hour (0-23) and day_of_week (0-6) features for {len(coins)} coins")
+        
+        return df
 
     def run(self, split_artifact: SplitDataArtifact = None) -> AugmentDataArtifact:
         """
@@ -44,6 +74,13 @@ class AugmentBlock(PipelineBlock):
 
         logger.info("Adding technical indicators to validation data...")
         val_augmented = add_technical_indicators(val_df, config=self.config)
+        
+        # Add time features (hour of day, day of week) for each coin
+        logger.info("Adding time features (hour, day_of_week) to training data...")
+        train_augmented = self._add_time_features(train_augmented)
+        
+        logger.info("Adding time features (hour, day_of_week) to validation data...")
+        val_augmented = self._add_time_features(val_augmented)
 
         # Verify we added the expected number of channels
         original_cols = len([c for c in train_df.columns if c.endswith('_close')])
@@ -55,7 +92,7 @@ class AugmentBlock(PipelineBlock):
         # Check indicator columns were added
         expected_indicators = ['rsi', 'macd', 'bb_position', 'ema_9', 'ema_21', 'ema_50', 'ema_ratio',
                                'stochastic', 'williams_r', 'atr', 'adx', 'obv', 'volume_roc', 'vwap',
-                               'price_momentum', 'support_resistance', 'volatility_regime']
+                               'price_momentum', 'support_resistance', 'volatility_regime', 'hour', 'day_of_week']
         sample_coin = [c.replace('_close', '') for c in train_df.columns if c.endswith('_close')][0]
 
         added_indicators = 0
@@ -64,7 +101,7 @@ class AugmentBlock(PipelineBlock):
             if col_name in train_augmented.columns:
                 added_indicators += 1
 
-        logger.info(f"Added {added_indicators}/{len(expected_indicators)} expected indicators per coin")
+        logger.info(f"Added {added_indicators}/{len(expected_indicators)} expected features per coin (17 indicators + 2 time features)")
 
         # Write augmented data
         train_path = self.artifact_io.write_dataframe(

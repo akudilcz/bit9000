@@ -51,13 +51,13 @@ class EvalArtifact:
 class EvaluateBlock(PipelineBlock):
     """Evaluate trained model on validation data"""
     
-    def run(self, train_artifact, sequences_artifact):
+    def run(self, train_artifact=None, sequences_artifact=None):
         """
         Evaluate model
         
         Args:
-            train_artifact: TrainedModelArtifact from step_07_train
-            sequences_artifact: SequencesArtifact from step_06_sequences
+            train_artifact: TrainedModelArtifact from step_07_train (optional, will load if None)
+            sequences_artifact: SequencesArtifact from step_06_sequences (optional, will load if None)
             
         Returns:
             EvalArtifact
@@ -65,6 +65,14 @@ class EvaluateBlock(PipelineBlock):
         logger.info("="*70)
         logger.info("STEP 7: EVALUATE - Validating model quality")
         logger.info("="*70)
+        
+        # Load artifacts if not provided
+        if train_artifact is None:
+            train_artifact_data = self.artifact_io.read_json('artifacts/step_07_train/train_artifact.json')
+            train_artifact = TrainedModelArtifact(**train_artifact_data)
+        if sequences_artifact is None:
+            sequences_artifact_data = self.artifact_io.read_json('artifacts/step_06_sequences/sequences_artifact.json')
+            sequences_artifact = SequencesArtifact(**sequences_artifact_data)
         
         device = self.config['training'].get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
         
