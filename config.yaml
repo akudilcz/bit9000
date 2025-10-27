@@ -32,8 +32,8 @@ split:
 # TOKENIZATION CONFIGURATION
 # =============================================================================
 tokenization:
-  vocab_size: 256
-  method: quantile  # Percentiles will be auto-generated at runtime (0.4 to 99.6)
+  vocab_size: 21
+  method: quantile  # Percentiles will be auto-generated at runtime
 
 # =============================================================================
 # SEQUENCE CONFIGURATION
@@ -41,25 +41,26 @@ tokenization:
 sequences:
   input_length: 48            # 48 hours (2 days) of historical context
   output_length: 1            # Single prediction
-  num_channels: 9             # Align with current sequences (price, volume + key indicators)
+  num_channels: 19            # All indicators: price, volume + 17 technical indicators
   prediction_horizon: 1        # Predict 1 hour ahead
 
 # =============================================================================
 # MODEL ARCHITECTURE
 # =============================================================================
 model:
-  version: v4
-  vocab_size: 256
-  num_classes: 256
+  version: v5
+  vocab_size: 21
+  num_classes: 21
   num_coins: 10
   
-  # Architecture (moderately larger to prevent mode collapse)
+  # Architecture (increased capacity)
   d_model: 256
   nhead: 8
-  num_encoder_layers: 4
-  num_decoder_layers: 3
+  num_encoder_layers: 10
+  num_decoder_layers: 10
   dim_feedforward: 1024
-  dropout: 0.1
+  dropout: 0.3
+  activation: gelu              # Activation function: relu, gelu, or silu
   channel_hidden_dim: 96
   channel_nhead: 4
   
@@ -80,23 +81,22 @@ training:
   device: cuda
   epochs: 12
   batch_size: 128
-  num_workers: 0
+  num_workers: 8
   
   # Optimizer
-  learning_rate: 0.0005
-  weight_decay: 0.001
+  learning_rate: 0.0001
+  weight_decay: 0.005
   max_grad_norm: 1.0
   
   # Regularization
-  dropout: 0.1
-  label_smoothing: 0.1
-  gaussian_noise: 0.01
-  ordinal_sigma: 10.0
+  dropout: 0.3
+  label_smoothing: 0.15
+  ordinal_sigma: 3.0  # Adjusted for 21 classes
   
   # Learning rate schedule
   scheduler: warmup_cosine
-  warmup_epochs: 3
-  warmup_start_lr: 0.00001
+  warmup_epochs: 5
+  warmup_start_lr: 0.000001
   
   # Early stopping
   early_stopping:

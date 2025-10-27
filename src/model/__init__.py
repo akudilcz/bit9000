@@ -1,6 +1,5 @@
 """Model architecture and training modules"""
 
-from src.model.v4_transformer import CryptoTransformerV4
 from src.model.v5_transformer import CryptoTransformerV5
 
 
@@ -12,7 +11,7 @@ def create_model(config):
         config: Configuration dictionary
 
     Returns:
-        CryptoTransformerV4 instance
+        CryptoTransformerV5 instance
     """
     model_cfg = config['model']
 
@@ -29,10 +28,8 @@ def create_model(config):
     version = model_cfg.get('version', 'v5').lower()
     if version == 'v5':
         return CryptoTransformerV5(config)
-    elif version == 'v4':
-        return CryptoTransformerV4(config)
     else:
-        raise ValueError(f"Unknown model version '{version}'. Use 'v4' or 'v5'.")
+        raise ValueError(f"Unknown model version '{version}'. Only 'v5' is supported.")
 
 
-__all__ = ['CryptoTransformerV4', 'CryptoTransformerV5', 'create_model']
+__all__ = ['CryptoTransformerV5', 'create_model']

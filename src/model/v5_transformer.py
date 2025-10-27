@@ -194,6 +194,7 @@ class CryptoTransformerV5(nn.Module):
         self.num_encoder_layers = int(model_config.get('num_encoder_layers', 3))
         self.dim_feedforward = int(model_config.get('dim_feedforward', 1024))
         self.dropout_rate = float(model_config.get('dropout', 0.2))
+        self.activation = str(model_config.get('activation', 'relu')).lower()  # Activation function
 
         # Channel fusion hyperparameters
         self.num_channels = int(seq_config.get('num_channels', 9))
@@ -231,7 +232,7 @@ class CryptoTransformerV5(nn.Module):
             nhead=self.nhead,
             dim_feedforward=self.dim_feedforward,
             dropout=self.dropout_rate,
-            activation='gelu',
+            activation=self.activation,
             batch_first=True,
             norm_first=True,
         )
@@ -250,10 +251,18 @@ class CryptoTransformerV5(nn.Module):
         )
 
         # Prediction head (single-horizon by default)
+        # Use activation function from config
+        if self.activation == 'gelu':
+            act_fn = nn.GELU()
+        elif self.activation == 'silu':
+            act_fn = nn.SiLU()
+        else:  # relu
+            act_fn = nn.ReLU()
+        
         self.head = nn.Sequential(
             nn.Linear(self.d_model, self.d_model // 2),
             nn.LayerNorm(self.d_model // 2),
-            nn.ReLU(),
+            act_fn,
             nn.Dropout(self.dropout_rate),
             nn.Linear(self.d_model // 2, self.num_classes),
         )
@@ -265,13 +274,31 @@ class CryptoTransformerV5(nn.Module):
         logger.info(
             f"Initialized CryptoTransformerV5 | d_model={self.d_model}, nhead={self.nhead}, "
             f"enc_layers={self.num_encoder_layers}, ff={self.dim_feedforward}, coins={self.num_coins}, "
-            f"channels={self.num_channels}, channel_hidden_dim={self.channel_hidden_dim}"
+            f"channels={self.num_channels}, channel_hidden_dim={self.channel_hidden_dim}, activation={self.activation}"
         )
 
     def _init_weights(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+        """Initialize weights for better convergence
+        
+        Strategy:
+        - Use Xavier for most layers (good for transformer)
+        - Use default Kaiming for final layer (prevents collapse)
+        - Zero out biases (standard practice)
+        """
+        for name, m in self.named_modules():
+            if isinstance(m, nn.Linear):
+                # Final prediction layer gets special treatment
+                if 'head' in name and m == self.head[-1]:
+                    # Use Kaiming normal for final layer (as in default PyTorch)
+                    # This gives better diversity at init
+                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                else:
+                    # Xavier for all other linear layers
+                    nn.init.xavier_uniform_(m.weight)
+                
+                # Zero out biases
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
 
     def _flatten_and_fuse(self, x: torch.Tensor) -> Tuple[torch.Tensor, int, int]:
         # x: (B, L, C, Ch)

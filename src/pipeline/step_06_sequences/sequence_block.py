@@ -214,9 +214,11 @@ class SequenceBlock(PipelineBlock):
         coins_from_config = self.config['data']['coins']
         all_columns = list(tokens_df.columns)
         
-        # Verify coins have all required channels (9 channels per coin)
+        # Verify coins have all required channels (19 channels per coin)
         coin_names = []
-        channels_list = ['price', 'volume', 'rsi', 'macd', 'bb_position', 'ema_9', 'ema_21', 'ema_50', 'ema_ratio']
+        channels_list = ['price', 'volume', 'rsi', 'macd', 'bb_position', 'ema_9', 'ema_21', 'ema_50', 'ema_ratio',
+                         'stochastic', 'williams_r', 'atr', 'adx', 'obv', 'volume_roc', 'vwap',
+                         'price_momentum', 'support_resistance', 'volatility_regime']
         
         for coin in coins_from_config:
             has_all_channels = all(f"{coin}_{ch}" in all_columns for ch in channels_list)
@@ -242,6 +244,16 @@ class SequenceBlock(PipelineBlock):
             tokens_array[:, coin_idx, 6] = tokens_df[f"{coin}_ema_21"].values
             tokens_array[:, coin_idx, 7] = tokens_df[f"{coin}_ema_50"].values
             tokens_array[:, coin_idx, 8] = tokens_df[f"{coin}_ema_ratio"].values
+            tokens_array[:, coin_idx, 9] = tokens_df[f"{coin}_stochastic"].values
+            tokens_array[:, coin_idx, 10] = tokens_df[f"{coin}_williams_r"].values
+            tokens_array[:, coin_idx, 11] = tokens_df[f"{coin}_atr"].values
+            tokens_array[:, coin_idx, 12] = tokens_df[f"{coin}_adx"].values
+            tokens_array[:, coin_idx, 13] = tokens_df[f"{coin}_obv"].values
+            tokens_array[:, coin_idx, 14] = tokens_df[f"{coin}_volume_roc"].values
+            tokens_array[:, coin_idx, 15] = tokens_df[f"{coin}_vwap"].values
+            tokens_array[:, coin_idx, 16] = tokens_df[f"{coin}_price_momentum"].values
+            tokens_array[:, coin_idx, 17] = tokens_df[f"{coin}_support_resistance"].values
+            tokens_array[:, coin_idx, 18] = tokens_df[f"{coin}_volatility_regime"].values
         
         # Find target coin index for output
         target_coin_idx = coin_names.index(target_coin)
