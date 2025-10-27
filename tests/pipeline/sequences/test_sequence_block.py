@@ -26,7 +26,10 @@ def config():
         'sequences': {
             'input_length': 24,  # 24 hours input
             'output_length': 8,   # 8 hours output
-            'num_channels': 2     # price + volume
+            'num_channels': 9     # price + volume + 7 technical indicators
+        },
+        'model': {
+            'num_classes': 3  # For testing
         }
     }
 

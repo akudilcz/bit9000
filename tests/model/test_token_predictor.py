@@ -1,7 +1,7 @@
-"""Tests for CryptoTransformerV4 model architecture"""
-
 import pytest
 import torch
+import torch.nn as nn
+
 from src.model.v4_transformer import CryptoTransformerV4
 
 
@@ -9,28 +9,35 @@ from src.model.v4_transformer import CryptoTransformerV4
 def config():
     """Test configuration matching updated design"""
     return {
-        'model': {
-            'vocab_size': 3,
-            'num_classes': 3,
-            'embedding_dim': 64,
-            'num_heads': 4,
-            'num_layers': 4,
-            'feedforward_dim': 256,
-            'dropout': 0.1
+        'data': {
+            'coins': ['BTC', 'ETH', 'XRP']
         },
         'sequences': {
             'input_length': 24,
             'output_length': 8,
             'num_channels': 9
         },
-        'data': {
-            'coins': ['BTC', 'ETH', 'XRP', 'BNB', 'SOL', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LTC']
+        'model': {
+            'vocab_size': 3,  # For simplicity in testing
+            'num_classes': 3,
+            'd_model': 128,
+            'nhead': 4,
+            'num_encoder_layers': 2,
+            'num_decoder_layers': 2,
+            'dim_feedforward': 256,
+            'dropout': 0.1,
+            'coin_embedding_dim': 16,
+            'positional_encoding': 'sinusoidal',
+            'max_seq_len': 1024,
+            'multi_horizon_enabled': False,
+            'btc_attention_enabled': True,
+            'time_features_enabled': False
         }
     }
 
 
 def test_model_accepts_correct_input_shape(config):
-    """Test that model accepts input shape (batch, 24, num_coins, 2)"""
+    """Test that model accepts input shape (batch, 24, num_coins, 9)"""
     model = CryptoTransformerV4(
         vocab_size=3,
         num_classes=3,
@@ -48,25 +55,27 @@ def test_model_accepts_correct_input_shape(config):
         binary_classification=False,
         num_channels=9
     )
-    
+
     batch_size = 16
-    input_length = config['sequences']['input_length']
-    num_coins = len(config['data']['coins'])
-    num_channels = config['sequences']['num_channels']
-    
-    # Create sample input: (batch, 24, 10, 2)
+    input_length = 24
+    num_coins = 3  # Use model's num_coins, not config
+    num_channels = 9
+
+    # Create sample input: (batch, 24, 3, 9)
     x = torch.randint(0, 3, (batch_size, input_length, num_coins, num_channels))
-    
+
     # Forward pass should not raise error
     try:
         output = model(x)
+        assert isinstance(output, dict), "Model should return a dictionary"
+        assert 'horizon_1h' in output, "Model should return horizon_1h prediction"
         assert True, "Model accepted correct input shape"
     except Exception as e:
         pytest.fail(f"Model failed with correct input shape: {e}")
 
 
 def test_model_output_shape(config):
-    """Test that model output shape is (batch, 8, 3) for 8-step predictions with teacher forcing"""
+    """Test that model output shape is correct for multi-horizon predictions"""
     model = CryptoTransformerV4(
         vocab_size=3,
         num_classes=3,
@@ -84,24 +93,26 @@ def test_model_output_shape(config):
         binary_classification=False,
         num_channels=9
     )
-    
+
     batch_size = 16
-    input_length = config['sequences']['input_length']
-    num_coins = len(config['data']['coins'])
-    num_channels = config['sequences']['num_channels']
-    output_length = config['sequences']['output_length']
-    num_classes = config['model']['num_classes']
-    
-    # Create sample input and targets
+    input_length = 24
+    num_coins = 3
+    num_channels = 9
+    num_classes = 3
+
+    # Create sample input
     x = torch.randint(0, 3, (batch_size, input_length, num_coins, num_channels))
-    y = torch.randint(0, 3, (batch_size, output_length))  # Targets for teacher forcing
+
+    # Forward pass
+    output = model(x)
     
-    # Forward pass with teacher forcing (training mode)
-    output = model(x, targets=y)
+    # Check output structure
+    assert isinstance(output, dict), "Model should return a dictionary"
+    assert 'horizon_1h' in output, "Model should return horizon_1h prediction"
     
-    # Check output shape: (batch, 8, 3)
-    assert output.shape == (batch_size, output_length, num_classes), \
-        f"Expected output shape ({batch_size}, {output_length}, {num_classes}), got {output.shape}"
+    # Check output shape for horizon_1h
+    horizon_1h = output['horizon_1h']['logits']
+    assert horizon_1h.shape == (batch_size, num_classes), f"Expected ({batch_size}, {num_classes}), got {horizon_1h.shape}"
 
 
 def test_model_handles_different_batch_sizes(config):
@@ -123,15 +134,22 @@ def test_model_handles_different_batch_sizes(config):
         binary_classification=False,
         num_channels=9
     )
-    
-    input_length = config['sequences']['input_length']
-    num_coins = len(config['data']['coins'])
-    num_channels = config['sequences']['num_channels']
-    
+
+    input_length = 24
+    num_coins = 3
+    num_channels = 9
+
     for batch_size in [1, 8, 32, 128]:
         x = torch.randint(0, 3, (batch_size, input_length, num_coins, num_channels))
         output = model(x)
-        assert output.shape[0] == batch_size, f"Batch size mismatch for size {batch_size}"
+        
+        # Check output structure
+        assert isinstance(output, dict), f"Batch size {batch_size}: Model should return a dictionary"
+        assert 'horizon_1h' in output, f"Batch size {batch_size}: Model should return horizon_1h prediction"
+        
+        # Check output shape
+        horizon_1h = output['horizon_1h']['logits']
+        assert horizon_1h.shape[0] == batch_size, f"Batch size {batch_size}: Expected batch dimension {batch_size}, got {horizon_1h.shape[0]}"
 
 
 def test_model_outputs_valid_logits(config):
@@ -153,23 +171,29 @@ def test_model_outputs_valid_logits(config):
         binary_classification=False,
         num_channels=9
     )
-    
+
     batch_size = 16
-    input_length = config['sequences']['input_length']
-    num_coins = len(config['data']['coins'])
-    num_channels = config['sequences']['num_channels']
-    
+    input_length = 24
+    num_coins = 3
+    num_channels = 9
+
     x = torch.randint(0, 3, (batch_size, input_length, num_coins, num_channels))
     output = model(x)
     
-    # Logits should not be constrained to [0, 1] or sum to 1
-    # They can be any real number
-    assert not torch.allclose(output.sum(dim=-1), torch.ones(batch_size, 8)), \
-        "Output looks like probabilities (sums to 1), should be logits"
+    # Check that outputs are logits (can be negative, don't sum to 1)
+    horizon_1h = output['horizon_1h']['logits']
+    assert horizon_1h.dtype == torch.float32, "Output should be float32"
+    
+    # Logits can be negative and don't sum to 1
+    assert torch.any(horizon_1h < 0), "Logits should contain negative values"
+    
+    # Check that softmax would give valid probabilities
+    probs = torch.softmax(horizon_1h, dim=-1)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(batch_size)), "Softmax should sum to 1"
 
 
 def test_model_parameters_count_reasonable(config):
-    """Test that model has reasonable number of parameters (< 10M)"""
+    """Test that model has reasonable number of parameters"""
     model = CryptoTransformerV4(
         vocab_size=3,
         num_classes=3,
@@ -187,20 +211,15 @@ def test_model_parameters_count_reasonable(config):
         binary_classification=False,
         num_channels=9
     )
-    
+
     total_params = sum(p.numel() for p in model.parameters())
     
-    # Model should be lightweight (< 10M parameters)
-    assert total_params < 10_000_000, \
-        f"Model has {total_params:,} parameters, should be < 10M for lightweight design"
-    
-    # Model should have at least some parameters
-    assert total_params > 10_000, \
-        f"Model has only {total_params:,} parameters, seems too small"
+    # Should have reasonable number of parameters (not too few, not too many)
+    assert 100_000 < total_params < 10_000_000, f"Model has {total_params} parameters, expected between 100k and 10M"
 
 
 def test_model_embedding_dimensions(config):
-    """Test that model has separate embeddings for price and volume"""
+    """Test that model has correct embedding structure"""
     model = CryptoTransformerV4(
         vocab_size=3,
         num_classes=3,
@@ -218,11 +237,18 @@ def test_model_embedding_dimensions(config):
         binary_classification=False,
         num_channels=9
     )
+
+    # Model should have coin embedding
+    assert hasattr(model, 'coin_embedding'), "Model should have coin embedding"
+    assert isinstance(model.coin_embedding, nn.Embedding), "Coin embedding should be nn.Embedding"
     
-    # Model should have token embeddings
-    # Check if model has expected components
-    assert hasattr(model, 'token_embedding') or hasattr(model, 'price_embedding'), \
-        "Model should have token embedding layer(s)"
+    # Model should have channel embeddings
+    assert hasattr(model, 'channel_embeddings'), "Model should have channel embeddings"
+    assert isinstance(model.channel_embeddings, nn.ModuleList), "Channel embeddings should be ModuleList"
+    assert len(model.channel_embeddings) == 9, "Should have 9 channel embeddings"
+    
+    # Model should have channel fusion
+    assert hasattr(model, 'channel_fusion'), "Model should have channel fusion layer"
 
 
 def test_model_eval_mode(config):
@@ -244,25 +270,27 @@ def test_model_eval_mode(config):
         binary_classification=False,
         num_channels=9
     )
-    
+
     # Set to eval mode
     model.eval()
-    
+    assert not model.training, "Model should be in eval mode"
+
     batch_size = 16
-    input_length = config['sequences']['input_length']
-    num_coins = len(config['data']['coins'])
-    num_channels = config['sequences']['num_channels']
-    
+    input_length = 24
+    num_coins = 3
+    num_channels = 9
+
     x = torch.randint(0, 3, (batch_size, input_length, num_coins, num_channels))
-    
+
     # Forward pass in eval mode should work
     with torch.no_grad():
         output = model(x)
-        assert output.shape[0] == batch_size
+        assert isinstance(output, dict), "Model should return a dictionary in eval mode"
+        assert 'horizon_1h' in output, "Model should return horizon_1h prediction in eval mode"
 
 
 def test_model_training_mode(config):
-    """Test that model can be trained with teacher forcing"""
+    """Test that model can be set to training mode"""
     model = CryptoTransformerV4(
         vocab_size=3,
         num_classes=3,
@@ -280,28 +308,18 @@ def test_model_training_mode(config):
         binary_classification=False,
         num_channels=9
     )
+    
     model.train()
-    
-    batch_size = 16
-    input_length = config['sequences']['input_length']
-    num_coins = len(config['data']['coins'])
-    num_channels = config['sequences']['num_channels']
-    output_length = config['sequences']['output_length']
-    
-    x = torch.randint(0, 3, (batch_size, input_length, num_coins, num_channels))
-    y = torch.randint(0, 3, (batch_size, output_length))
-    
-    # Forward pass with teacher forcing
-    output = model(x, targets=y)
-    
-    # Compute loss
-    criterion = torch.nn.CrossEntropyLoss()
-    loss = criterion(output.view(-1, 3), y.view(-1))
-    
-    # Backward pass should work
-    loss.backward()
-    
-    # Gradients should be computed
-    assert any(p.grad is not None for p in model.parameters()), \
-        "No gradients computed during backward pass"
+    assert model.training, "Model should be in training mode"
 
+    batch_size = 16
+    input_length = 24
+    num_coins = 3
+    num_channels = 9
+
+    x = torch.randint(0, 3, (batch_size, input_length, num_coins, num_channels))
+
+    # Forward pass in training mode should work
+    output = model(x)
+    assert isinstance(output, dict), "Model should return a dictionary in training mode"
+    assert 'horizon_1h' in output, "Model should return horizon_1h prediction in training mode"

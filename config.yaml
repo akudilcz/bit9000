@@ -41,43 +41,35 @@ tokenization:
 sequences:
   input_length: 48            # 48 hours (2 days) of historical context
   output_length: 1            # Single prediction
-  num_channels: 9              # 9 channels: price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio
-  prediction_horizon: 1     # Predict 1 hour ahead
+  num_channels: 18            # 18 channels: price, volume + 16 technical indicators
+  prediction_horizon: 1        # Predict 1 hour ahead
 
 # =============================================================================
 # MODEL ARCHITECTURE
 # =============================================================================
 model:
-  # Model configuration
   vocab_size: 256
-  num_classes: 256            # 256-class token prediction
+  num_classes: 256
   num_coins: 10
   binary_classification: false
   
-  # Architecture (tuned via Optuna) - increased for 10 coins
+  # Architecture
   d_model: 256
   nhead: 8
   num_encoder_layers: 3
   num_decoder_layers: 2
   dim_feedforward: 1024
-  dropout: 0.25
+  dropout: 0.2
   
-  # Embeddings and encoding
+  # Embeddings
   coin_embedding_dim: 16
   positional_encoding: sinusoidal
   max_seq_len: 1024
   
-  # V4 Features (simplified for 10-coin training)
+  # V4 Features
   multi_horizon_enabled: false
   btc_attention_enabled: true
-  time_features_enabled: false  # Disable time features to reduce complexity
-
-  # Alternative: Use V1 model (simpler, more stable)
-  # type: CryptoTransformerV1
-
-  # For testing V1 vs V4:
-  # V1: Simpler, more stable, good baseline
-  # V4: Complex but potentially better with more data
+  time_features_enabled: false
 
 # =============================================================================
 # TRAINING CONFIGURATION
@@ -88,15 +80,15 @@ training:
   batch_size: 128
   num_workers: 0
   
-  # Optimizer (optimized for better validation performance)
-  learning_rate: 0.0015  # Slightly higher for faster convergence
-  weight_decay: 0.0001   # Reduced to prevent over-regularization
-  max_grad_norm: 1.0     # Standard gradient clipping
+  # Optimizer
+  learning_rate: 0.0015
+  weight_decay: 0.0001
+  max_grad_norm: 1.0
   
-  # Regularization (balanced for 9-channel model)
-  dropout: 0.2           # Reduced from 0.25 to prevent underfitting
-  label_smoothing: 0.01  # Slight smoothing for better generalization
-  gaussian_noise: 0.05   # Reduced noise to prevent information loss
+  # Regularization
+  dropout: 0.2
+  label_smoothing: 0.01
+  gaussian_noise: 0.05
   
   # Learning rate schedule
   scheduler: warmup_cosine
@@ -109,21 +101,22 @@ training:
     patience: 30
     min_delta: 0.0001
   
-  # Loss function
-  loss_type: distance_weighted  # 'cross_entropy', 'soft_ordinal', 'distance_weighted', or 'ordinal_regression'
-  ordinal_sigma: 5.0  # For soft_ordinal: controls spread (1=sharp, 10=wide)
-  distance_alpha: 0.05  # For distance_weighted: penalty factor (0.05 achieved best accuracy 0.30%)
+  # Loss function (precision-focused)
+  loss_type: asymmetric
+  buy_penalty: 10.0
+  no_buy_penalty: 1.0
   use_class_weights: true
 
 # =============================================================================
 # INFERENCE CONFIGURATION
 # =============================================================================
 inference:
-  # 3-class calibration for BUY and SELL signals
-  target_signal_rate: 0.02  # 2% target rate for BUY and SELL signals     # Target 5% signal rate for both BUY and SELL
+  target_signal_rate: 0.01
   calibration:
-    mode: precision_at_most_rate  # choose top-k <= rate to maximize precision
-    min_signals: 20               # avoid extremely tiny k that overfits noise
+    mode: precision_at_most_rate
+    min_signals: 10
+    confidence_threshold: 0.8
+    precision_target: 0.75
 
 # =============================================================================
 # LOGGING CONFIGURATION

@@ -1,13 +1,13 @@
-# Simple Multi-Coin Token Predictor - Technical Specification
+# CryptoTransformerV4 - High Precision Trading Signal Predictor
 
 ## Overview
 
-**Objective**: Train a lightweight transformer decoder to predict the next hour's XRP price movement using 24 hours of multi-coin token sequences. Generate 8-hour forecasts autoregressively at inference time.
+**Objective**: Train a precision-focused transformer to predict XRP price direction 1 hour ahead using comprehensive technical analysis across 10 cryptocurrencies. Optimized for high-precision BUY/SELL signals with minimal false positives.
 
-**Input**: `(24, 10, 2)` - 24 hours × 10 coins × 2 channels (price + volume)  
-**Output**: `(1,)` - Next hour XRP price direction token  
-**Vocabulary**: 256 bins `{0-255}` for continuous price quantization  
-**Architecture**: Transformer decoder-only with causal masking, autoregressive generation
+**Input**: `(48, 10, 18)` - 48 hours × 10 coins × 18 channels (price, volume + 16 technical indicators)  
+**Output**: `(1,)` - Next hour XRP price direction (BUY/NO-BUY binary classification)  
+**Architecture**: Encoder-decoder transformer with BTC→XRP attention pathway  
+**Target**: >75% precision on BUY signals with ~1% signal rate
 
 ---
 
@@ -16,896 +16,413 @@
 ```
 Step 0: Reset
   └─> Clean artifacts directory
+      Input: None
+      Output: Clean artifacts/ directory
 
 Step 1: Download
-  └─> OHLCV data (2020-2025, 10 coins, hourly)
-      ├─ raw_data.parquet [T × (10 coins × 5 OHLCV)]
-      └─ Visualizations: price trends, data quality
+  └─> Fetch OHLCV data from Binance API
+      Input: None (uses config dates: 2018-05-05 to 2025-10-25)
+      Output: raw_data.parquet [T × (10 coins × 5 OHLCV columns)]
+      Contribution: Raw market data collection
 
 Step 2: Clean
-  └─> Fill gaps, remove outliers
-      ├─ clean_data.parquet [T × (10 coins × 5 OHLCV)]
-      └─ Quality metrics: % filled, % outliers
+  └─> Fill gaps, remove outliers, validate data quality
+      Input: raw_data.parquet [T × (10 coins × 5 OHLCV)]
+      Output: clean_data.parquet [T × (10 coins × 5 OHLCV)]
+      Contribution: Data quality assurance, outlier removal
 
 Step 3: Split
-  └─> Temporal split (80% train, 20% val)
-      ├─ train_clean.parquet [T_train × (10 coins × 5)]
-      └─ val_clean.parquet [T_val × (10 coins × 5)]
+  └─> Temporal train/validation split (80%/20%)
+      Input: clean_data.parquet [T × (10 coins × 5 OHLCV)]
+      Output: train_clean.parquet [T_train × (10 coins × 5)]
+             val_clean.parquet [T_val × (10 coins × 5)]
+      Contribution: Prevents data leakage, ensures temporal separation
 
-Step 4: Tokenize
-  └─> Convert price/volume to 256-bin tokens
-      ├─ Compute log returns (price) and log changes (volume)
-      ├─ Fit bin edges (0-255) based on percentiles on train data
-      ├─ Apply bins to train & val
-      ├─ train_tokens.parquet [T_train × 20 cols: COIN_price, COIN_volume]
-      ├─ val_tokens.parquet [T_val × 20 cols]
-      └─ fitted_thresholds.json {coin: {price: [bin_edges], volume: [bin_edges]}}
+Step 4: Augment
+  └─> Add comprehensive technical indicators
+      Input: train_clean.parquet, val_clean.parquet [T × (10 coins × 5 OHLCV)]
+      Output: train_augmented.parquet, val_augmented.parquet [T × (10 coins × 23 features)]
+      Contribution: 16 technical indicators per coin (RSI, MACD, EMAs, Stochastic, ADX, ATR, OBV, VWAP, etc.)
 
-Step 5: Sequences
-  └─> Create rolling windows (24h input → 1h target)
-      ├─ train_X.pt [(N_train, 24, 10, 2)] - all coins, 2 channels
-      ├─ train_y.pt [(N_train,)] - next hour XRP price token only
-      ├─ val_X.pt [(N_val, 24, 10, 2)]
-      └─ val_y.pt [(N_val,)]
+Step 5: Tokenize
+  └─> Convert continuous values to 256-bin tokens
+      Input: train_augmented.parquet, val_augmented.parquet [T × (10 coins × 23 features)]
+      Output: train_tokens.parquet, val_tokens.parquet [T × (10 coins × 18 channels)]
+             fitted_thresholds.json (quantile bin edges)
+      Contribution: Quantile-based tokenization, uniform distribution, no data leakage
 
-Step 6: Train
-  └─> Transformer decoder with teacher forcing
-      ├─ Embed price & volume tokens separately (256 vocab)
-      ├─ Fuse channels → d_model=256
-      ├─ Aggregate coins (mean pooling)
-      ├─ Apply positional encoding
-      ├─ Transformer decoder (4 layers, causal mask)
-      ├─ Output head → 256 classes (next 1 hour)
-      ├─ model.pt (best checkpoint)
-      └─ history.json (loss/accuracy curves)
+Step 6: Sequences
+  └─> Create rolling window sequences for supervised learning
+      Input: train_tokens.parquet, val_tokens.parquet [T × (10 coins × 18 channels)]
+      Output: train_X.pt [(N_train, 48, 10, 18)] - input sequences
+             train_y.pt [(N_train,)] - binary targets (BUY/NO-BUY)
+             val_X.pt [(N_val, 48, 10, 18)]
+             val_y.pt [(N_val,)]
+      Contribution: Sliding window sequences, binary classification targets
 
-Step 7: Evaluate
-  └─> Autoregressive generation on validation set
-      ├─ Generate 8 steps ahead autoregressively
-      ├─ Per-hour accuracy (hours 1-8)
-      ├─ Sequence accuracy (all 8 correct)
-      ├─ Baseline comparison (persistence, random)
-      └─ eval_results.json + confusion matrices
+Step 7: Train
+  └─> Train CryptoTransformerV4 with precision-focused loss
+      Input: train_X.pt, train_y.pt, val_X.pt, val_y.pt
+      Output: model.pt (best checkpoint)
+             history.json (training metrics)
+             train_artifact.json (training results)
+      Contribution: Asymmetric loss (7455x penalty for wrong BUY calls), precision-based early stopping
 
-Step 8: Inference
-  └─> Real-time prediction
-      ├─ Fetch last 24h of OHLCV
-      ├─ Tokenize with fitted bin edges
-      ├─ Autoregressive generation: loop 8 times predicting 1 step at a time
-      ├─ Each step: append predicted token to input, shift window, predict next
-      └─ predictions.json {hour: 1-8, token, probabilities}
+Step 8: Evaluate
+  └─> Comprehensive validation with precision metrics
+      Input: model.pt, val_X.pt, val_y.pt
+      Output: eval_results.json (precision, recall, F1, confidence analysis)
+             confusion_matrices/ (per-confidence-level analysis)
+      Contribution: Precision-focused evaluation, confidence analysis, signal quality metrics
+
+Step 9: Inference
+  └─> Real-time prediction with confidence filtering
+      Input: Latest OHLCV data
+      Output: predictions.json {signal: BUY/NO-BUY, confidence: 0-1, timestamp}
+      Contribution: High-confidence predictions only (>80% confidence), precision-focused calibration
 ```
 
 **Key Transformations**:
-- OHLCV → Tokens: `log(price[t]/price[t-1])` → quantize to 256 bins → `{0-255}`
-- Tokens → Sequences: sliding window (stride=1) → `(24h, 10 coins, 2 ch)` inputs, 1 target
-- Training: Teacher forcing with ground truth next-hour target
-- Inference: Autoregressive generation - predict 1 step, append to sequence, predict next
+- OHLCV → Technical Indicators: 16 comprehensive indicators per coin (momentum, trend, volatility, volume, market structure)
+- Continuous → Tokens: Quantile-based binning to 256 tokens per channel for uniform distribution
+- Tokens → Sequences: 48-hour sliding window → `(48h, 10 coins, 18 ch)` inputs, binary BUY/NO-BUY target
+- Training: Asymmetric loss with 7455x penalty for wrong BUY predictions
+- Inference: High-confidence predictions only (>80% confidence threshold)
 
 ---
 
 ## Design Principles
 
-1. **Single-step prediction**: Model predicts only the next hour; simplicity and stability
-2. **Autoregressive generation**: 8-hour forecasts generated by iterative 1-step predictions
-3. **Continuous quantization**: 256 bins provide fine-grained price movement representation
-4. **Uniform binning**: Bins fit on training data percentiles for balanced distribution
-5. **Multi-coin context**: BTC/ETH patterns inform XRP predictions
-6. **No data leakage**: Fit bin edges on training data only
-7. **Decoder-only**: Causal masking prevents future information leakage
+1. **Precision-First**: Optimize for high precision (>75%) over high recall, minimizing false BUY signals
+2. **Comprehensive Analysis**: 18 channels per coin covering momentum, trend, volatility, volume, and market structure
+3. **Binary Classification**: Simple BUY/NO-BUY decision for clear trading signals
+4. **Asymmetric Loss**: Heavily penalize wrong BUY calls (7455x penalty) to ensure conservative predictions
+5. **High Confidence**: Only issue signals with >80% confidence to maximize precision
+6. **Temporal Integrity**: 48-hour context window with strict temporal train/validation split
+7. **Multi-Coin Context**: BTC→XRP attention pathway leverages Bitcoin's market leadership
+8. **No Data Leakage**: All preprocessing (binning, normalization) fit on training data only
 
 ---
 
 ## Pipeline Steps
 
 ### Step 0: Reset
-
-**Purpose**: Clear all previous pipeline artifacts and start fresh
-
-**Process**:
-1. Remove all contents from `artifacts/` directory
-2. Initialize empty directory structure for each pipeline step
-3. Create reset metadata artifact
-
-**Artifacts**:
-- `reset_artifact.json`: Metadata about reset operation (timestamp, path cleared)
-
----
+**Purpose**: Clear all previous pipeline artifacts and start fresh  
+**Input**: None  
+**Output**: Clean artifacts/ directory  
+**Contribution**: Ensures reproducible pipeline runs from scratch
 
 ### Step 1: Download
-
-**Purpose**: Fetch historical OHLCV (Open, High, Low, Close, Volume) data for 10 cryptocurrencies
-
-**Input**: None (external data source: CoinGecko, Binance, or similar API)
-
-**Output**: Raw OHLCV data in parquet format
-
-**Process**:
-1. Query data API for 10 coins: BTC, ETH, BNB, XRP, SOL, DOGE, ADA, AVAX, DOT, LTC
-2. Time period: 2020-01-01 to 2025-12-31 (6 years of hourly data)
-3. For each coin, fetch: Open, High, Low, Close, Volume
-4. Handle missing data gracefully (record gaps)
-5. Validate data quality: check for NaNs, zero volumes, price ranges
-6. Save as parquet for efficient storage and loading
-
-**Artifacts**:
-- `raw_data.parquet`: Shape `[T, 50]` where T is number of hourly timestamps
-  - Columns: BTC_open, BTC_high, BTC_low, BTC_close, BTC_volume, ETH_open, ... (5 cols × 10 coins)
-- `download_artifact.json`: Metadata (coins, date range, rows downloaded, missing data %)
-- Visualizations: Price trends over time for each coin, data completeness heatmap
-
----
+**Purpose**: Fetch historical OHLCV data for 10 cryptocurrencies from Binance API  
+**Input**: None (uses config dates: 2018-05-05 to 2025-10-25)  
+**Output**: raw_data.parquet [T × (10 coins × 5 OHLCV columns)]  
+**Contribution**: Raw market data collection with quality validation
 
 ### Step 2: Clean
-
-**Purpose**: Fill gaps, handle outliers, and ensure data quality
-
-**Input**: Raw OHLCV data from Step 1
-
-**Output**: Cleaned OHLCV data ready for analysis
-
-**Process**:
-1. **Fill gaps**: Forward fill for short gaps (<24 hours), remove coins/periods with long gaps
-2. **Outlier detection**: Flag extreme price movements (e.g., >50% in 1 hour) - investigate or interpolate
-3. **Volume validation**: Remove zero-volume periods, flag suspicious patterns
-4. **Price validation**: Ensure High ≥ Close ≥ Low ≥ 0
-5. **Alignment**: Ensure all coins have same timestamps (reindex if needed)
-6. **Normalization**: All prices in USD, volumes in base currency units
-
-**Artifacts**:
-- `clean_data.parquet`: Same shape as raw data, but cleaned and aligned
-  - Shape: `[T', 50]` where T' ≤ T (fewer rows if long gaps removed)
-- `clean_artifact.json`: Metadata
-  - Gaps filled: % and number
-  - Outliers detected/fixed: count per coin
-  - Time range after cleaning
-  - Quality score: 0-100
-
----
+**Purpose**: Fill gaps, remove outliers, validate data quality  
+**Input**: raw_data.parquet [T × (10 coins × 5 OHLCV)]  
+**Output**: clean_data.parquet [T × (10 coins × 5 OHLCV)]  
+**Contribution**: Data quality assurance, outlier removal, gap filling
 
 ### Step 3: Split
+**Purpose**: Temporal train/validation split (80%/20%)  
+**Input**: clean_data.parquet [T × (10 coins × 5 OHLCV)]  
+**Output**: train_clean.parquet [T_train × (10 coins × 5)]  
+         val_clean.parquet [T_val × (10 coins × 5)]  
+**Contribution**: Prevents data leakage, ensures temporal separation
 
-**Purpose**: Temporal train/validation split to prevent data leakage
+### Step 4: Augment
+**Purpose**: Add comprehensive technical indicators for enhanced signal prediction  
+**Input**: train_clean.parquet, val_clean.parquet [T × (10 coins × 5 OHLCV)]  
+**Output**: train_augmented.parquet, val_augmented.parquet [T × (10 coins × 23 features)]  
+**Contribution**: 16 technical indicators per coin:
+- **Momentum**: RSI, Stochastic, Williams %R, Price Momentum
+- **Trend**: MACD, EMA-9/21/50, EMA Ratio, ADX
+- **Volatility**: Bollinger Band Position, ATR, Volatility Regime
+- **Volume**: OBV, Volume ROC, VWAP
+- **Market Structure**: Support/Resistance Strength
 
-**Input**: Clean OHLCV data from Step 2
+### Step 5: Tokenize
+**Purpose**: Convert continuous values to 256-bin tokens for transformer input  
+**Input**: train_augmented.parquet, val_augmented.parquet [T × (10 coins × 23 features)]  
+**Output**: train_tokens.parquet, val_tokens.parquet [T × (10 coins × 18 channels)]  
+         fitted_thresholds.json (quantile bin edges)  
+**Contribution**: Quantile-based tokenization, uniform distribution, no data leakage
 
-**Output**: Train and validation sets separated by time
+### Step 6: Sequences
+**Purpose**: Create rolling window sequences for supervised learning  
+**Input**: train_tokens.parquet, val_tokens.parquet [T × (10 coins × 18 channels)]  
+**Output**: train_X.pt [(N_train, 48, 10, 18)] - input sequences  
+         train_y.pt [(N_train,)] - binary targets (BUY/NO-BUY)  
+         val_X.pt [(N_val, 48, 10, 18)]  
+         val_y.pt [(N_val,)]  
+**Contribution**: Sliding window sequences, binary classification targets
 
-**Process**:
-1. Calculate split point: 80% of timestamps for training, 20% for validation
-2. Temporal split (NOT random): maintain temporal order
-   - Example: Train = 2020-2024, Val = 2024-2025
-3. Split each of the 10 coins independently (each coin gets same split point)
-4. Save as separate parquet files
+### Step 7: Train
+**Purpose**: Train CryptoTransformerV4 with precision-focused loss  
+**Input**: train_X.pt, train_y.pt, val_X.pt, val_y.pt  
+**Output**: model.pt (best checkpoint)  
+         history.json (training metrics)  
+         train_artifact.json (training results)  
+**Contribution**: Asymmetric loss (7455x penalty for wrong BUY calls), precision-based early stopping
 
-**Rationale for temporal split**:
-- Prevents **data leakage**: Model can't see future data during training
-- Reflects real-world deployment: model makes predictions on future unseen data
-- Avoids look-ahead bias: validation only contains data after training data
+### Step 8: Evaluate
+**Purpose**: Comprehensive validation with precision metrics  
+**Input**: model.pt, val_X.pt, val_y.pt  
+**Output**: eval_results.json (precision, recall, F1, confidence analysis)  
+         confusion_matrices/ (per-confidence-level analysis)  
+**Contribution**: Precision-focused evaluation, confidence analysis, signal quality metrics
 
-**Artifacts**:
-- `train_clean.parquet`: Training set
-  - Shape: `[T_train, 50]` where T_train ≈ 0.8 × T'
-- `val_clean.parquet`: Validation set
-  - Shape: `[T_val, 50]` where T_val ≈ 0.2 × T'
-- `split_artifact.json`: Metadata
-  - Train rows: T_train, date range
-  - Val rows: T_val, date range
-  - Split ratio: 0.8 / 0.2
-  - No temporal overlap confirmed
-
-### Step 4: Tokenization
-
-**Input**: Clean OHLCV data  
-**Output**: Token DataFrames with 2 channels per coin
-
-**Process**:
-1. **Fit Phase** (training data only):
-   - Compute log returns: `r_price = log(close[t] / close[t-1])`
-   - Compute log changes: `r_volume = log(volume[t] / volume[t-1])`
-   - Calculate 256 bin edges (0-255) using quantile-based binning per coin per channel
-   - Save bin edges: `{coin: {price: [edge_0, edge_1, ..., edge_255], volume: [...]}`
-
-2. **Transform Phase** (train + val):
-   - Apply fitted bins using `np.digitize()`:
-     - Token = bin_index based on which quantile interval the return falls into
-     - Range: 0-255 for each price/volume return
-
-**Artifacts**:
-- `train_tokens.parquet`: columns like `BTC_price`, `BTC_volume`, etc. (values 0-255)
-- `val_tokens.parquet`
-- `fitted_thresholds.json`
-- Visualizations: token distribution, bin edge heatmap
-
-### Step 5: Sequence Creation
-
-**Input**: Tokenized DataFrames  
-**Output**: PyTorch tensors
-
-**Process**:
-- Create rolling windows (stride=1):
-  - `X`: 24 consecutive hours × all coins × 2 channels
-  - `y`: next single hour of XRP price token only
-- Drop incomplete windows
-
-**Tensor Shapes**:
-- `train_X.pt`: `(N_train, 24, 10, 2)` dtype=long
-- `train_y.pt`: `(N_train,)` dtype=long (single next-hour token)
-- `val_X.pt`: `(N_val, 24, 10, 2)` dtype=long
-- `val_y.pt`: `(N_val,)` dtype=long (single next-hour token)
-
-### Step 6: Model Training
-
-**Architecture**: Transformer Decoder-Only
-
-**Components**:
-1. **Token Embeddings**: Separate embeddings for price (256×64) and volume (256×64)
-2. **Channel Fusion**: Concatenate and project to `d_model=256`
-3. **Coin Aggregation**: Mean pooling across coins per timestep
-4. **Positional Encoding**: Sinusoidal (max_len = 24)
-5. **Transformer Decoder**: 4 layers, 4 heads, causal masking
-6. **Output Head**: Linear projection to 256 classes (predicts next hour only)
-
-**Training**:
-- **Loss**: Cross-entropy with teacher forcing
-- **Optimizer**: AdamW (lr=1e-4, weight_decay=1e-5)
-- **Batch size**: 256
-- **Gradient clipping**: max_norm=1.0
-- **Scheduler**: ReduceLROnPlateau (factor=0.5, patience=10, min_lr=1e-6)
-- **Early stopping**: patience=20 epochs
-- **Warmup**: 5 epochs (1e-7 → 1e-4)
-
-**Artifacts**:
-- `model.pt`: Best checkpoint (by val loss)
-- `history.json`: Training metrics
-- Visualizations: loss curves, accuracy curves
-
-### Step 7: Evaluation
-
-**Process**:
-1. For each validation sample, perform autoregressive generation:
-   - Start with 24-hour input window
-   - Predict next hour (hour 1)
-   - Append prediction to sequence and remove first hour (shift window)
-   - Repeat 7 more times to get 8 predictions
-
-**Metrics**:
-1. **Per-hour accuracy**: Accuracy at each of 8 prediction steps (hour 1 is most accurate, hour 8 least)
-2. **Sequence accuracy**: % where all 8 predictions correct
-3. **Confusion matrices**: Per-hour (hours 1, 4, 8)
-4. **Baseline comparisons**:
-   - Persistence: repeat last token for all 8 hours
-   - Random: uniform distribution for each hour
-
-**Target Performance**:
-- Hour-1 accuracy > 25% (baseline: ~0.39% random per bin)
-- Hour-8 accuracy > 20%
-- Sequence accuracy > 0.01%
-
-**Artifacts**:
-- `eval_results.json`: All metrics
-- Visualizations: accuracy decay, confusion matrices, baseline comparison
-
-### Step 8: Inference
-
-**Process**:
-1. Fetch last 24+1 hours of OHLCV data
-2. Tokenize using fitted bin edges (2 channels)
-3. Create initial tensor: `(1, 24, 10, 2)` (batch_size=1)
-4. Loop 8 times:
-   - Run model: get logits for next hour (256 classes)
-   - Sample/argmax to get predicted token
-   - Append prediction to sequence
-   - Remove first hour from sequence (keep it 24 hours long)
-5. Return 8 predictions with probabilities
-
-**Output Format**:
-```json
-{
-  "timestamp": "2025-10-23T12:00:00Z",
-  "coin": "XRP",
-  "horizon_hours": 8,
-  "predictions": [
-    {
-      "hour": 1,
-      "prediction": 128,
-      "confidence": 0.57,
-      "probabilities": [0.001, 0.002, ..., 0.57, ...]  # 256 values
-    },
-    ...
-  ]
-}
-```
+### Step 9: Inference
+**Purpose**: Real-time prediction with confidence filtering  
+**Input**: Latest OHLCV data  
+**Output**: predictions.json {signal: BUY/NO-BUY, confidence: 0-1, timestamp}  
+**Contribution**: High-confidence predictions only (>80% confidence), precision-focused calibration
 
 ---
 
-## Model Specification
+## Model Architecture
 
-### Model Architecture Options
+### CryptoTransformerV4
+**Type**: Encoder-decoder transformer with specialized pathways  
+**Input**: `(batch_size, 48, 10, 18)` - 48 hours × 10 coins × 18 channels  
+**Output**: `(batch_size, 2)` - Binary classification (BUY/NO-BUY)
 
-The system supports three model architectures:
+**Key Components**:
+1. **Channel Embeddings**: Variable-dimension embeddings for 18 channels per coin
+2. **Channel Fusion**: Concatenate and project to d_model=256
+3. **Coin Embeddings**: Learnable embeddings for 10 cryptocurrencies
+4. **Positional Encoding**: Sinusoidal encoding for 48-hour sequences
+5. **Encoder-Decoder**: 3 encoder layers, 2 decoder layers, 8 attention heads
+6. **BTC→XRP Attention**: Specialized attention pathway from Bitcoin to XRP
+7. **Output Head**: Binary classification with precision-focused loss
 
-#### 1. CryptoTransformerV1 (V1)
-**Type**: Decoder-only Transformer (GPT-style)
-**Use Case**: Baseline model, fast training, low memory
-
-**Parameters**:
-- `vocab_size`: 256
-- `embedding_dim`: 64
-- `d_model`: 256 (embedding_dim × 2 after channel fusion)
-- `num_heads`: 4
-- `num_layers`: 4
-- `feedforward_dim`: 512
-- `dropout`: 0.1
-- `input_length`: 24
-- `num_coins`: 10
-- `num_classes`: 256
-- `num_channels`: 2
-
-**Architecture**:
-1. Token Embeddings: Separate for price and volume (256×64 each)
-2. Channel Fusion: Concatenate and project to d_model=256
-3. Coin Aggregation: Mean pooling across 10 coins
-4. Positional Encoding: Sinusoidal
-5. Transformer Decoder: 4 layers, 4 heads, causal masking
-6. Output Head: Linear(256 → 256 classes)
-
-**Model Size**: ~8.5M parameters ≈ 34 MB (fp32)
-
-**Methods**:
-- `forward(x, targets=None)`: Training with teacher forcing, outputs logits (batch, 256)
-- `generate(x, steps=8)`: Autoregressive inference, generates steps tokens sequentially
-
----
-
-#### 2. CryptoTransformerV2 (V2)
-**Type**: Enhanced Decoder-only Transformer
-**Use Case**: Improved performance, multi-coin attention
-
-**Parameters**:
-- `vocab_size`: 256
-- `embedding_dim`: 128-256 (configurable)
-- `d_model`: 512-1024 (configurable)
-- `num_heads`: 4-8
-- `num_layers`: 1-6 (tunable)
-- `feedforward_dim`: 256-1024
-- `dropout`: 0.1-0.3
-- `coin_embedding_dim`: 32
-- `input_length`: 24-168 hours
-- `num_coins`: 10
-- `num_classes`: 256
-
-**Architecture Improvements over V1**:
-- Coin-specific embeddings (learn each asset's behavior)
-- Enhanced channel fusion with layer normalization
-- Optional stochastic depth for regularization
-- Learned positional encodings (scales better)
-- Multi-head coin attention
-
-**Model Size**: ~10M-60M parameters (depending on config)
-
-**Best Tuned Config** (from Optuna):
-- embedding_dim: 16, d_model: 64, num_layers: 2, num_heads: 2
-- Batch size: 128, LR: 0.00217, dropout: 0.16
-- Best val loss: 5.49 (OrdinalRegressionLoss)
-
----
-
-#### 3. CryptoTransformerV3 (V3) ⭐ **RECOMMENDED**
-**Type**: Encoder-Decoder Transformer
-**Use Case**: State-of-the-art performance, literature-backed design
-
-**Parameters**:
-- `vocab_size`: 256
-- `num_classes`: 256
-- `num_coins`: 10
-- `d_model`: 512
-- `nhead`: 8
-- `num_encoder_layers`: 4
-- `num_decoder_layers`: 4
+**Architecture Parameters**:
+- `d_model`: 256 (embedding dimension)
+- `nhead`: 8 (attention heads)
+- `num_encoder_layers`: 3
+- `num_decoder_layers`: 2
 - `dim_feedforward`: 1024
-- `dropout`: 0.1
-- `coin_embedding_dim`: 32
-- `positional_encoding`: 'learned' or 'sinusoidal'
-- `max_seq_len`: 256 (supports up to 10+ days of hourly data)
-
-**Multi-Task Heads**:
-- **Primary**: 256-class classification (ordinal tokens)
-- **Auxiliary 1**: Regression head (expected token index) with Huber loss
-- **Auxiliary 2**: Quantile heads (τ=0.1, 0.5, 0.9) for uncertainty estimation
-
-**Architecture** (Literature-Backed):
-1. **Encoder**: Processes all 10 coins independently
-   - Coin embeddings (32-dim per coin)
-   - Price & volume embeddings fused per coin
-   - Multi-head self-attention across temporal sequence
-   - 4 encoder layers with pre-LN (more stable)
-
-2. **Decoder**: Focuses on target coin (XRP)
-   - Cross-attention to encoder memory (multi-asset context)
-   - Causal self-attention (no future leakage)
-   - 4 decoder layers with pre-LN
-
-3. **Multi-Task Heads**:
-   - Classification: Linear(d_model → 256) for token prediction
-   - Regression: MLP(d_model → 1) for expected continuous value
-   - Quantiles: 3 × MLP(d_model → 1) for uncertainty bounds
-
-**Model Size**: ~15M parameters ≈ 60 MB (fp32)
-
-**Advantages over V1/V2**:
-- ✅ Separate encoder/decoder roles (better than decoder-only)
-- ✅ Cross-attention captures multi-asset correlations
-- ✅ Multi-task learning stabilizes training
-- ✅ Regression head improves ordinal awareness
-- ✅ Quantile heads provide uncertainty estimates
-- ✅ Deeper architecture (4+4 layers vs 1-4 in V1/V2)
-- ✅ Scales to 7-day context (168 hours)
-
-**Literature Support**:
-- Encoder-Decoder: Vaswani et al. (2017) - Attention Is All You Need
-- Multi-Task Learning: Caruana (1997) - improves generalization
-- Huber Loss: Huber (1964) - robust to outliers in financial data
-- Pre-LN: Xiong et al. (2020) - more stable than post-LN
-
-**Configuration Example**:
-```yaml
-model:
-  type: CryptoTransformerV3
-  d_model: 512
-  nhead: 8
-  num_encoder_layers: 4
-  num_decoder_layers: 4
-  dim_feedforward: 1024
-  dropout: 0.1
-  coin_embedding_dim: 32
-  positional_encoding: learned
-  multitask_enabled: true
-  enable_regression: true
-  enable_quantiles: false
-```
+- `dropout`: 0.2
+- `coin_embedding_dim`: 16
 
 ---
 
-### Loss Function Options
+## Technical Indicators
 
-The system supports four ordinal-aware loss functions:
+### Comprehensive Indicator Suite (16 per coin)
 
-#### 1. CrossEntropyLoss (Baseline)
-**Type**: Standard classification loss
-**Formula**: `-log(p_true_class)`
+**Momentum Indicators**:
+- **RSI** (14-period): Overbought/oversold conditions (0-100)
+- **Stochastic** (14-period): Price momentum relative to recent range (0-100)
+- **Williams %R** (14-period): Momentum oscillator (-100 to 0)
+- **Price Momentum** (10-period): Rate of price change (percentage)
 
-**Characteristics**:
-- Treats all misclassifications equally
-- Predicting token 56 vs 200 has same penalty as 56 vs 57
-- Fast and stable
-- No ordinal structure awareness
+**Trend Indicators**:
+- **MACD**: Moving Average Convergence Divergence histogram
+- **EMA-9, EMA-21, EMA-50**: Multi-timeframe exponential moving averages
+- **EMA Ratio**: Fast/slow EMA relationship (0-1 normalized)
+- **ADX** (14-period): Average Directional Index for trend strength (0-100)
 
-**Use Case**: Baseline comparison only
+**Volatility Indicators**:
+- **Bollinger Band Position**: Price position within volatility bands (0-1)
+- **ATR** (14-period): Average True Range for volatility measurement
+- **Volatility Regime**: Current volatility percentile vs historical (0-1)
 
-**Parameters**: 
-- `label_smoothing`: Optional smoothing (default: 0.0)
+**Volume Indicators**:
+- **OBV**: On-Balance Volume momentum indicator
+- **Volume ROC** (10-period): Volume rate of change (percentage)
+- **VWAP** (20-period): Volume Weighted Average Price
 
-**Performance**: Not recommended for ordinal tokens
+**Market Structure Indicators**:
+- **Support/Resistance Strength**: Price clustering analysis (0-1)
 
----
-
-#### 2. SmoothOrdinalLoss ⭐ **GOOD**
-**Type**: Soft-label Gaussian smoothing
-**Formula**: KL divergence between softmax(logits) and Gaussian(true_class, σ)
-
-**How It Works**:
-- Creates soft target distribution centered at true class
-- Nearby classes get non-zero probability based on distance
-- Example: If true=100, then class 99,101 get ~0.8 prob, 98,102 get ~0.6, etc.
-- Uses Gaussian kernel: `exp(-distance² / (2σ²))` or `exp(-distance⁴ / (2σ²))` (squared penalty)
-
-**Characteristics**:
-- ✅ Rewards nearby predictions (solves original problem)
-- ✅ Smooth gradients, stable training
-- ✅ Flexible penalty via σ parameter
-- ⚠️ Slower due to per-sample loop
-- ⚠️ Can plateau if σ too small
-
-**Parameters**:
-- `ordinal_sigma`: Standard deviation (default: 5.0)
-  - Smaller σ = stricter (only nearest neighbors rewarded)
-  - Larger σ = more lenient (distant tokens get some reward)
-  - Recommended: 3-10
-
-**Configuration**:
-```yaml
-training:
-  loss_type: smooth_ordinal
-  ordinal_sigma: 5.0  # Distance ~5 tokens gets ~0.6 probability
-```
-
-**Performance**: Val loss ~5.52, stable training
-
----
-
-#### 3. OrdinalRegressionLoss 🏆 **BEST LOSS**
-**Type**: Cumulative probability constraints
-**Formula**: Penalizes violations of ordinal structure via cumulative logits
-
-**How It Works**:
-- Treats classification as ordinal regression
-- For K classes (0-255), maintains cumulative probabilities P(y ≤ k)
-- Enforces: P(y ≤ j) should be low if j < true_class
-- Enforces: P(y ≤ j) should be high if j ≥ true_class
-- Uses log-sigmoid for numerical stability
-
-**Characteristics**:
-- ✅ Best validation loss (5.49) in experiments
-- ✅ Theoretically sound for ordinal data
-- ✅ Enforces global ordinal constraints
-- ⚠️ Can plateau at ~5.2 (strict constraints hard to satisfy)
-- ⚠️ More complex than distance-weighted
-
-**Parameters**:
-- `ordinal_margin`: Soft margin for constraints (default: 0.5)
-
-**Configuration**:
-```yaml
-training:
-  loss_type: ordinal
-  ordinal_margin: 0.5
-```
-
-**Performance**: Best val loss 5.49, but plateaus around 5.2
-
----
-
-#### 4. DistanceWeightedCrossEntropy ⭐🏆 **BEST ACCURACY**
-**Type**: Distance-weighted classification
-**Formula**: `loss = -log(p_true) × (1 + α × distance)`
-
-**How It Works**:
-- Standard cross-entropy weighted by prediction distance
-- If prediction is wrong, penalty scales linearly with distance
-- Distance = |predicted_token - true_token|
-- Example: Predicting 56 vs 57 → penalty × 1.05, vs 200 → penalty × 8.2
-
-**Characteristics**:
-- ✅ **Best accuracy (0.303%)** in experiments
-- ✅ Simplest ordinal-aware loss
-- ✅ Stable convergence (92 epochs without plateauing)
-- ✅ Fast computation (no loops)
-- ✅ Pragmatic for noisy financial data
-- ✅ Balances ordinal awareness with flexibility
-
-**Parameters**:
-- `distance_alpha`: Distance penalty factor (default: 0.05)
-  - α=0.01: 10% penalty per 10 tokens distance (mild)
-  - α=0.05: 50% penalty per 10 tokens distance (moderate) ⭐ **RECOMMENDED**
-  - α=0.1: 100% penalty per 10 tokens distance (strict)
-
-**Configuration**:
-```yaml
-training:
-  loss_type: distance_weighted
-  distance_alpha: 0.05  # 5% extra penalty per token distance
-```
-
-**Performance**: Val loss 5.50, accuracy 0.303%, 92 epochs stable training
-
-**Why It's Best**:
-- Crypto prices are noisy → strict ordinal constraints too rigid
-- Rewards nearby predictions (solves core problem)
-- Allows model to learn exceptions when data demands it
-- Scales well with deeper models and longer sequences
-
----
-
-### Multi-Task Learning (V3 Only)
-
-CryptoTransformerV3 supports multi-task objectives:
-
-**Combined Loss**:
-```
-L_total = w_cls × L_classification + w_huber × L_regression + w_quantile × L_quantile
-```
-
-**Components**:
-1. **Classification Loss**: Any of the 4 losses above
-2. **Regression Loss**: Huber loss on expected token index (continuous)
-   - Helps model learn ordinal structure via continuous target
-   - Robust to outliers (combines L1 + L2)
-3. **Quantile Loss**: Pinball loss for τ ∈ {0.1, 0.5, 0.9}
-   - Provides uncertainty bounds
-   - Optional (disabled by default)
-
-**Default Weights**:
-- w_cls: 1.0 (primary task)
-- w_huber: 0.3 (auxiliary, helps ordinal learning)
-- w_quantile: 0.0 (disabled by default)
-
-**Configuration**:
-```yaml
-training:
-  loss_type: distance_weighted
-  distance_alpha: 0.05
-  multitask:
-    enabled: true
-    w_cls: 1.0
-    w_huber: 0.3
-    w_quantile: 0.0  # Enable with 0.1-0.2 if needed
-```
-
----
-
-### Loss Function Comparison
-
-| Loss | Val Loss | Accuracy | Training Speed | Ordinal Awareness | Stability | Recommendation |
-|------|----------|----------|----------------|-------------------|-----------|----------------|
-| CrossEntropyLoss | N/A | Low | Fast | ❌ None | ✅ High | ❌ Not recommended |
-| SmoothOrdinalLoss | 5.52 | 0.28% | Slow | ✅ Soft | ⚠️ Can plateau | ✅ Good |
-| OrdinalRegressionLoss | **5.49** | 0.28% | Medium | ✅ Strong | ⚠️ Plateaus @5.2 | ✅ Best loss |
-| DistanceWeightedCE | 5.50 | **0.30%** | Fast | ✅ Pragmatic | ✅ Excellent | 🏆 **Best overall** |
-
-**Recommendation for V3**:
-- **Primary**: DistanceWeightedCrossEntropy with α=0.05
-- **Auxiliary**: Enable regression head (w_huber=0.3)
-- **Optional**: Add quantile loss (w_quantile=0.1) for uncertainty
-
----
-
-### Model Selection Guide
-
-| Scenario | Recommended Model | Recommended Loss | Why |
-|----------|------------------|------------------|-----|
-| **Quick prototype** | CryptoTransformerV1 | DistanceWeightedCE | Fast, simple, proven |
-| **Production (best accuracy)** | CryptoTransformerV3 | DistanceWeightedCE + Huber | State-of-the-art, multi-task |
-| **Limited GPU memory** | CryptoTransformerV1 | DistanceWeightedCE | Smallest model (~8M params) |
-| **Research/experimentation** | CryptoTransformerV3 | Any loss + multitask | Flexible, extensible |
-| **7-day context** | CryptoTransformerV3 | DistanceWeightedCE + Huber | Scales to 168 hours |
-| **Baseline comparison** | CryptoTransformerV1 | CrossEntropyLoss | Standard benchmark |
+### Normalization Strategy
+All indicators normalized to [0,1] range for consistent tokenization:
+- **Percentage-based**: RSI, Stochastic, ADX scaled by 100
+- **Range-based**: Williams %R offset and scaled
+- **Rolling normalization**: ATR, OBV normalized by rolling statistics
+- **Price-relative**: EMAs, VWAP normalized relative to current price
+- **Clipped ranges**: Volume ROC, Price Momentum clipped to reasonable ranges
 
 ---
 
 ## Configuration (config.yaml)
 
+### Data Configuration
 ```yaml
 data:
-  coins: [BTC, ETH, BNB, XRP, SOL, DOGE, ADA, AVAX, DOT, LTC]
+  coins: [BTC, ETH, LTC, XRP, BNB, ADA, XLM, TRX, DOGE, DOT]
   target_coin: XRP
   interval: 1h
+  default_start_date: 2018-05-05
+  default_end_date: 2025-10-25
+```
 
-split:
-  train_ratio: 0.8
-  temporal: true
-
-tokenization:
-  vocab_size: 256
-  method: quantile
-  percentiles: [1, 2, 3, ..., 99]  # 255 bin edges for 256 bins
-
+### Sequence Configuration
+```yaml
 sequences:
-  input_length: 24
-  output_length: 1  # Single next-hour prediction
-  num_channels: 2
+  input_length: 48            # 48 hours of historical context
+  output_length: 1           # Single prediction
+  num_channels: 18          # 18 channels: price, volume + 16 technical indicators
+  prediction_horizon: 1     # Predict 1 hour ahead
+```
 
+### Model Architecture
+```yaml
 model:
-  type: CryptoTransformerV1
   vocab_size: 256
   num_classes: 256
   num_coins: 10
-  embedding_dim: 64
+  binary_classification: false
+  
+  # Architecture
   d_model: 256
-  num_heads: 4
-  num_layers: 4
-  feedforward_dim: 512
-  dropout: 0.1
+  nhead: 8
+  num_encoder_layers: 3
+  num_decoder_layers: 2
+  dim_feedforward: 1024
+  dropout: 0.2
+  
+  # Embeddings
+  coin_embedding_dim: 16
+  positional_encoding: sinusoidal
+  max_seq_len: 1024
+  
+  # V4 Features
+  multi_horizon_enabled: false
+  btc_attention_enabled: true
+  time_features_enabled: false
+```
 
+### Training Configuration
+```yaml
 training:
   device: cuda
-  epochs: 100
-  batch_size: 256
-  learning_rate: 0.0001
-  weight_decay: 0.00001
-  label_smoothing: 0.0
+  epochs: 50
+  batch_size: 128
+  num_workers: 0
+  
+  # Optimizer
+  learning_rate: 0.0015
+  weight_decay: 0.0001
   max_grad_norm: 1.0
+  
+  # Regularization
+  dropout: 0.2
+  label_smoothing: 0.01
+  gaussian_noise: 0.05
+  
+  # Learning rate schedule
+  scheduler: warmup_cosine
+  warmup_epochs: 3
+  warmup_start_lr: 0.00001
+  
+  # Early stopping
   early_stopping:
-    patience: 20
-  warmup:
-    epochs: 5
-    start_lr: 0.0000001
-  scheduler:
-    type: ReduceLROnPlateau
-    factor: 0.5
-    patience: 10
-    min_lr: 0.000001
+    enabled: true
+    patience: 30
+    min_delta: 0.0001
+  
+  # Loss function (precision-focused)
+  loss_type: asymmetric
+  buy_penalty: 10.0
+  no_buy_penalty: 1.0
+  use_class_weights: true
+```
 
+### Inference Configuration
+```yaml
 inference:
-  num_steps: 8  # Generate 8 steps autoregressively
-  sampling: argmax  # or 'sample' for stochastic generation
+  target_signal_rate: 0.01
+  calibration:
+    mode: precision_at_most_rate
+    min_signals: 10
+    confidence_threshold: 0.8
+    precision_target: 0.75
 ```
 
 ---
 
-## Artifact Structure
+## Loss Functions
+
+### AsymmetricPrecisionLoss (Active)
+**Purpose**: Heavily penalize wrong BUY calls to maximize precision  
+**Penalty Ratio**: 7455x higher penalty for wrong BUY vs correct BUY  
+**Parameters**:
+- `buy_penalty`: 10.0 (penalty for wrong BUY predictions)
+- `no_buy_penalty`: 1.0 (penalty for wrong NO-BUY predictions)
+
+### Alternative Loss Functions
+- **PrecisionFocusedLoss**: Configurable precision vs recall weighting
+- **ConfidenceWeightedLoss**: Penalizes high-confidence wrong predictions
+- **PrecisionRecallLoss**: Direct F-beta optimization (β=0.5 emphasizes precision)
+
+---
+
+## Performance Targets
+
+### Precision Goals
+- **BUY Precision**: >75% (up from current 65%)
+- **Signal Rate**: ~1% (very selective for high quality)
+- **Confidence Threshold**: >80% (only high-confidence predictions)
+- **False Positive Penalty**: 7455x higher than false negatives
+
+### Model Performance
+- **Training**: Precision-based early stopping
+- **Validation**: Comprehensive precision metrics tracking
+- **Inference**: High-confidence predictions only
+- **Calibration**: Precision-focused threshold optimization
+
+---
+
+## File Structure
 
 ```
 artifacts/
-├── step_04_tokenize/
-│   ├── train_tokens.parquet
-│   ├── val_tokens.parquet
-│   ├── fitted_thresholds.json
-│   └── tokenize_artifact.json
-├── step_05_sequences/
-│   ├── train_X.pt  # (N, 24, 10, 2)
-│   ├── train_y.pt  # (N, 8)
-│   ├── val_X.pt
-│   ├── val_y.pt
-│   └── sequences_artifact.json
-├── step_06_train/
-│   ├── model.pt
-│   ├── history.json
-│   └── train_artifact.json
-├── step_07_evaluate/
-│   ├── eval_results.json
-│   └── evaluate_artifact.json
-└── step_08_inference/
-    ├── predictions_{timestamp}.json
-    └── inference_artifact.json
+├── step_00_reset/
+├── step_01_download/
+├── step_02_clean/
+├── step_03_split/
+├── step_04_augment/
+├── step_05_tokenize/
+├── step_06_sequences/
+├── step_07_train/
+├── step_08_evaluate/
+└── step_09_inference/
+
+src/
+├── model/
+│   ├── trainer.py
+│   └── v4_transformer.py
+├── pipeline/
+│   ├── orchestrator.py
+│   ├── schemas.py
+│   └── step_XX_*/ (one per pipeline step)
+└── utils/
+    ├── technical_indicators.py
+    ├── precision_loss.py
+    └── ordinal_loss.py
 ```
 
 ---
 
-## Data Schemas
+## Usage
 
-### TokenizeArtifact
-```python
-{
-  "train_path": str,
-  "val_path": str,
-  "train_shape": tuple,
-  "val_shape": tuple,
-  "thresholds_path": str,
-  "token_distribution": {
-    bin_id: {"train": float, "val": float}
-    for bin_id in range(256)
-  }
-}
-```
-
-### SequencesArtifact
-```python
-{
-  "train_X_path": str,
-  "train_y_path": str,
-  "val_X_path": str,
-  "val_y_path": str,
-  "train_num_samples": int,
-  "val_num_samples": int,
-  "input_length": 24,
-  "output_length": 1,  # Single next-hour prediction
-  "num_coins": 10,
-  "num_channels": 2,
-  "target_coin": "XRP",
-  "vocab_size": 256
-}
-```
-
-### TrainedModelArtifact
-```python
-{
-  "model_path": str,
-  "history_path": str,
-  "best_val_loss": float,
-  "best_val_acc": float,
-  "total_epochs": int
-}
-```
-
-### EvalReportArtifact
-```python
-{
-  "per_hour_accuracy": [float] * 8,
-  "sequence_accuracy": float,
-  "baseline_results": {
-    "random": float,
-    "persistence": float
-  }
-}
-```
-
----
-
-## Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| 24-hour input | Captures daily cycles, trains faster than 48h |
-| 2 channels | Price + volume captures strength & direction |
-| 256-bin vocab | Fine-grained continuous quantization, interpretable |
-| Quantile binning | Auto-balanced distribution, coin-adaptive |
-| Fit on train only | Prevents data leakage |
-| Decoder-only | Causal masking prevents future leakage |
-| Teacher forcing | Stable training, fast convergence |
-| 8-hour horizon | Practical for trading, measurable |
-
----
-
-## Success Criteria
-
-### Pipeline Validation
-- ✅ Tokenization produces uniform distribution on train (each bin ~0.39%)
-- ✅ No data leakage (val distribution may differ)
-- ✅ All tensor shapes correct
-- ✅ Token values in range [0, 255]
-
-### Model Performance
-- 🎯 Hour-1 accuracy > 25% (baseline: ~0.39% random per bin)
-- 🎯 Hour-8 accuracy > 20%
-- 🎯 Sequence accuracy > 0.01%
-- 🎯 Beats all baselines significantly
-
-### Deployment
-- ✅ Inference < 100ms
-- ✅ Model size < 500MB
-- ✅ Reproducible results
-
----
-
-## Known Limitations
-
-1. **Accuracy challenge**: 256 classes is significantly harder than 3 classes
-2. **Accuracy degrades over horizon**: 8-hour predictions inherently uncertain
-3. **No uncertainty calibration**: Softmax probabilities ≠ true confidence
-4. **Macro event blindness**: Model can't handle news/crashes outside training distribution
-5. **Single-coin output**: Only predicts XRP
-6. **Fixed 8-hour horizon**: Not adaptive to user preferences
-
----
-
-## Computational Requirements
-
-- **Training**: 1 GPU (RTX 3080+), ~3-6 hours for 100 epochs (larger vocab than 3-class), 3-5 GB GPU memory
-- **Inference**: CPU sufficient, <50ms per prediction
-- **Storage**: <200 MB total (data + model)
-
----
-
-## Implementation Notes
-
-1. **Anti-leakage**: Bin edges must be fit on train data only, then applied to val/inference
-2. **Single-step output**: Model predicts only 1 token (next hour), not 8
-3. **Teacher forcing**: During training, use ground truth next-hour token as target
-4. **Autoregressive generation**: During eval/inference, loop 8 times:
-   - Forward pass through decoder
-   - Get logits for all 256 classes
-   - Select token (argmax or sample)
-   - Append predicted token to sequence
-   - Remove first (oldest) hour to maintain 24-hour window
-   - Repeat
-5. **Causal masking**: Position i can only attend to positions ≤ i (prevents future leakage)
-6. **Channel handling**: Separate embeddings for price/volume, then fuse
-7. **Target extraction**: Only XRP price channel used for targets, not volume
-8. **Temporal separation**: Input = hours [0-23], Target = hour [24] (no overlap)
-
----
-
-## CLI Interface
-
+### Run Complete Pipeline
 ```bash
-# Full pipeline
-python main.py pipeline run-all
-
-# Individual steps
-python main.py pipeline tokenize
-python main.py pipeline sequences
-python main.py pipeline train
-python main.py pipeline evaluate
-python main.py pipeline inference
+python main.py
 ```
 
----
+### Run Individual Steps
+```bash
+python -m src.pipeline.orchestrator --step 4  # Run augment step only
+```
 
-## Testing Requirements
-
-1. **Unit tests**: Each pipeline block, model forward/generate
-2. **Integration tests**: End-to-end pipeline execution
-3. **Shape validation**: All tensor dimensions correct
-4. **Leakage detection**: Val thresholds ≠ train thresholds
-5. **Reproducibility**: Same seed → same results
+### Configuration
+Edit `config.yaml` to modify:
+- Data sources and date ranges
+- Model architecture parameters
+- Training hyperparameters
+- Loss function settings
+- Inference calibration parameters
