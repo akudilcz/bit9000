@@ -68,7 +68,7 @@ class CyclicalTimeEncoding(nn.Module):
         self.d_model = d_model
         
         # Project cyclical features to d_model
-        self.time_projection = nn.Linear(4, d_model)  # 2 for hour + 2 for day
+        self.time_projection = nn.Linear(4, self.d_model)  # 2 for hour + 2 for day
         
     def forward(self, timestamps: torch.Tensor) -> torch.Tensor:
         """
@@ -76,7 +76,7 @@ class CyclicalTimeEncoding(nn.Module):
             timestamps: (batch, seq_len) - unix timestamps or datetime indices
             
         Returns:
-            time_embeddings: (batch, seq_len, d_model)
+            time_embeddings: (batch, seq_len, self.d_model)
         """
         # For now, we'll compute hour and day from the timestamp
         # Assuming timestamps are in hours since epoch (modify as needed)
@@ -95,7 +95,7 @@ class CyclicalTimeEncoding(nn.Module):
         cyclical_features = torch.stack([hour_sin, hour_cos, day_sin, day_cos], dim=-1)
         
         # Project to d_model
-        time_emb = self.time_projection(cyclical_features)  # (batch, seq_len, d_model)
+        time_emb = self.time_projection(cyclical_features)  # (batch, seq_len, self.d_model)
         
         return time_emb
 
@@ -110,114 +110,118 @@ class CryptoTransformerV4(nn.Module):
     - Cross-attention from XRP decoder to BTC features
     """
     
-    def __init__(
-        self,
-        vocab_size: int = 256,
-        num_classes: int = 256,
-        num_coins: int = 4,  # BTC, ETH, LTC, XRP
-        d_model: int = 256,
-        nhead: int = 8,
-        num_encoder_layers: int = 3,
-        num_decoder_layers: int = 3,
-        dim_feedforward: int = 1024,
-        dropout: float = 0.3,
-        coin_embedding_dim: int = 32,
-        max_seq_len: int = 1024,
-        target_coin_idx: int = 3,  # XRP
-        btc_coin_idx: int = 0,  # BTC
-        binary_classification: bool = False,  # NEW: Binary BUY/NO-BUY classification
-        num_channels: int = 9,  # NEW: Make channels configurable
-    ):
+    def __init__(self, config: dict = None):
         super().__init__()
-        
-        self.vocab_size = vocab_size
-        self.num_classes = num_classes
-        self.num_coins = num_coins
-        self.num_channels = num_channels
-        self.d_model = d_model
-        self.target_coin_idx = target_coin_idx
-        self.btc_coin_idx = btc_coin_idx
-        self.max_seq_len = max_seq_len
-        self.binary_classification = binary_classification
-        
+
+        config = config or {}
+        model_config = config.get('model', {})
+
+        # Extract all parameters from config with defaults
+        self.vocab_size = model_config.get('vocab_size', 256)
+        self.num_classes = model_config.get('num_classes', 256)
+        self.num_coins = len(config.get('data', {}).get('coins', []))
+        self.d_model = model_config.get('d_model', 256)
+        self.nhead = model_config.get('nhead', 8)
+        self.num_encoder_layers = model_config.get('num_encoder_layers', 3)
+        self.num_decoder_layers = model_config.get('num_decoder_layers', 3)
+        self.dim_feedforward = model_config.get('dim_feedforward', 1024)
+        self.dropout_rate = model_config.get('dropout', 0.3)
+        self.coin_embedding_dim = model_config.get('coin_embedding_dim', 32)
+        self.max_seq_len = model_config.get('max_seq_len', 1024)
+
+        # Get coin indices from data config
+        data_config = config.get('data', {})
+        coins = data_config.get('coins', ['BTC', 'ETH', 'LTC', 'XRP'])
+        target_coin = data_config.get('target_coin', 'XRP')
+        btc_coin = 'BTC'
+
+        try:
+            self.target_coin_idx = coins.index(target_coin)
+            self.btc_coin_idx = coins.index(btc_coin)
+        except ValueError as e:
+            raise ValueError(f"Required coin not found in coins list {coins}: {e}")
+
+        # Special parameters
+        self.num_channels = config.get('sequences', {}).get('num_channels', 9)
+
         # Coin-specific embeddings
-        self.coin_embedding = nn.Embedding(num_coins, coin_embedding_dim)
+        self.coin_embedding = nn.Embedding(self.num_coins, self.coin_embedding_dim)
         
         # Token embeddings for configurable channels (price, volume, RSI, MACD, BB position, EMA-9, EMA-21, EMA-50, EMA-ratio)
         # Use smaller embedding dimensions that sum to d_model when combined with coin embedding
         # Ensure we don't lose information by using proper division
-        total_channel_dim = d_model - coin_embedding_dim
-        channel_embedding_dim = total_channel_dim // num_channels
-        remainder = total_channel_dim % num_channels
-        
+        total_channel_dim = self.d_model - self.coin_embedding_dim
+        channel_embedding_dim = total_channel_dim // self.num_channels
+        remainder = total_channel_dim % self.num_channels
+
         # Distribute remainder across first few channels to avoid information loss
-        channel_dims = [channel_embedding_dim] * num_channels
+        channel_dims = [channel_embedding_dim] * self.num_channels
         for i in range(remainder):
             channel_dims[i] += 1
             
         logger.info(f"Channel embedding dimensions: {channel_dims} (total: {sum(channel_dims)})")
         
         self.channel_embeddings = nn.ModuleList([
-            nn.Embedding(vocab_size, dim) for dim in channel_dims
+            nn.Embedding(self.vocab_size, dim) for dim in channel_dims
         ])
         
         # Channel fusion: concatenate all channel embeddings + coin embedding
-        fusion_dim = sum(channel_dims) + coin_embedding_dim
+        fusion_dim = sum(channel_dims) + self.coin_embedding_dim
         self.channel_fusion = nn.Sequential(
-            nn.Linear(fusion_dim, d_model),
-            nn.LayerNorm(d_model),
+            nn.Linear(fusion_dim, self.d_model),
+            nn.LayerNorm(self.d_model),
             nn.ReLU(),
-            nn.Dropout(dropout)
+            nn.Dropout(self.dropout_rate)
         )
         
         # Time-based feature encoding
-        self.time_encoding = CyclicalTimeEncoding(d_model)
-        self.position_encoding = SinusoidalPositionalEncoding(d_model, dropout)
+        self.time_encoding = CyclicalTimeEncoding(self.d_model)
+        self.position_encoding = SinusoidalPositionalEncoding(self.d_model, self.dropout_rate)
         
         # Shared encoder: process all coins
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
+            d_model=self.d_model,
+            nhead=self.nhead,
+            dim_feedforward=self.dim_feedforward,
+            dropout=self.dropout_rate,
             activation='gelu',
             batch_first=True,
             norm_first=True
         )
         self.shared_encoder = nn.TransformerEncoder(
             encoder_layer,
-            num_layers=num_encoder_layers,
-            norm=nn.LayerNorm(d_model)
+            num_layers=self.num_encoder_layers,
+            norm=nn.LayerNorm(self.d_model)
         )
         
         # BTC-specific encoder (dedicated pathway)
         self.btc_encoder = nn.TransformerEncoder(
             encoder_layer,
             num_layers=2,  # Smaller dedicated encoder
-            norm=nn.LayerNorm(d_model)
+            norm=nn.LayerNorm(self.d_model)
         )
         
         # XRP decoder: attends to shared encoder + BTC encoder
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
+            d_model=self.d_model,
+            nhead=self.nhead,
+            dim_feedforward=self.dim_feedforward,
+            dropout=self.dropout_rate,
             activation='gelu',
             batch_first=True,
             norm_first=True
         )
         self.xrp_decoder = nn.TransformerDecoder(
             decoder_layer,
-            num_layers=num_decoder_layers,
-            norm=nn.LayerNorm(d_model)
+            num_layers=self.num_decoder_layers,
+            norm=nn.LayerNorm(self.d_model)
         )
         
         # BTC→XRP cross-attention (explicit pathway)
         self.btc_to_xrp_attention = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads=nhead,
-            dropout=dropout,
+            embed_dim=self.d_model,
+            num_heads=self.nhead,
+            dropout=self.dropout_rate,
             batch_first=True
         )
         
@@ -237,27 +241,27 @@ class CryptoTransformerV4(nn.Module):
 
         # By default create both; single-horizon will use only 'horizon_1h'
         self.horizon_heads = nn.ModuleDict({
-            'horizon_1h': self._make_prediction_head(d_model, num_classes if not binary_classification else 2, dropout)
+            'horizon_1h': self._make_prediction_head(self.d_model, self.num_classes, self.dropout_rate)
         })
         
         self._init_weights()
         
         param_count = self.count_parameters()
         logger.info(f"Initialized CryptoTransformerV4 with {param_count:,} parameters")
-        logger.info(f"  Shared Encoder: {num_encoder_layers} layers, BTC Encoder: 2 layers, XRP Decoder: {num_decoder_layers} layers")
-        logger.info(f"  d_model: {d_model}, nhead: {nhead}, dim_ff: {dim_feedforward}")
-        logger.info(f"  Prediction head: single-horizon ({'binary BUY/NO-BUY' if binary_classification else f'{num_classes} classes'})")
+        logger.info(f"  Shared Encoder: {self.num_encoder_layers} layers, BTC Encoder: 2 layers, XRP Decoder: {self.num_decoder_layers} layers")
+        logger.info(f"  d_model: {self.d_model}, nhead: {self.nhead}, dim_ff: {self.dim_feedforward}")
+        logger.info(f"  Prediction head: single-horizon (256-class token prediction)")
         logger.info(f"  BTC→XRP dedicated attention pathway enabled")
         logger.info(f"  Time features: hour, day of week, sequence position")
     
     def _make_prediction_head(self, d_model: int, num_classes: int, dropout: float) -> nn.Module:
         """Create a prediction head for one time horizon"""
         return nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.LayerNorm(d_model // 2),
+            nn.Linear(self.d_model, self.d_model // 2),
+            nn.LayerNorm(self.d_model // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(d_model // 2, num_classes)
+            nn.Linear(self.d_model // 2, num_classes)
         )
     
     def count_parameters(self) -> int:
@@ -340,7 +344,7 @@ class CryptoTransformerV4(nn.Module):
             
         Returns:
             dict with keys: 'horizon_1h', 'horizon_2h', 'horizon_4h', 'horizon_8h'
-            Each contains: {'logits': (batch, num_classes)}
+            Each contains: {'logits': (batch, self.num_classes)}
         """
         B, L, C, Ch = x.shape
         

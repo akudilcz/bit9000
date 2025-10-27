@@ -107,7 +107,7 @@ Step 9: Inference
 ## Pipeline Steps
 
 ### Step 0: Reset
-**Purpose**: Clear all previous pipeline artifacts and start fresh  
+**Purpose**: Clear all previous pipeline artifacts and start fresh
 **Input**: None  
 **Output**: Clean artifacts/ directory  
 **Contribution**: Ensures reproducible pipeline runs from scratch

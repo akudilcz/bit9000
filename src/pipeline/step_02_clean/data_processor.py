@@ -17,14 +17,16 @@ logger = get_logger(__name__)
 class CryptoDataset(Dataset):
     """PyTorch Dataset for cryptocurrency data"""
     
-    def __init__(self, sequences: np.ndarray, targets: np.ndarray):
+    def __init__(self, sequences: np.ndarray, targets: np.ndarray, config: dict = None):
         """
         Initialize dataset
         
         Args:
             sequences: Input sequences, shape (samples, seq_len, num_coins)
             targets: Target labels, shape (samples, num_coins)
+            config: Configuration dictionary
         """
+        config = config or {}
         self.sequences = torch.FloatTensor(sequences)
         self.targets = torch.LongTensor(targets)
     

@@ -1,6 +1,6 @@
 """Step 6: Train - Train transformer on token sequences
 
-Simplified 3-class classification (SELL, HOLD, BUY) with independent calibration
+256-class token prediction with standard cross-entropy loss
 """
 
 import torch
@@ -19,8 +19,6 @@ from src.pipeline.base import PipelineBlock
 from src.pipeline.schemas import ArtifactMetadata
 from src.model import create_model
 from src.utils.logger import get_logger
-from src.utils.ordinal_loss import create_ordinal_loss
-from src.utils.precision_loss import create_precision_loss
 
 logger = get_logger(__name__)
 
@@ -54,7 +52,7 @@ class TrainBlock(PipelineBlock):
     def run(self, sequences_artifact):
         """Train model on sequences"""
         logger.info("="*70)
-        logger.info("STEP 6: TRAIN - Training 3-class classifier (SELL/HOLD/BUY)")
+        logger.info("STEP 6: TRAIN - Training 256-class token prediction")
         logger.info("="*70)
         
         # Load training config
@@ -96,37 +94,12 @@ class TrainBlock(PipelineBlock):
         model = create_model(self.config)
         model = model.to(device)
         logger.info(f"  Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-        logger.info(f"  Using 3-class classification (SELL, HOLD, BUY)")
+        logger.info(f"  Using 256-class token prediction")
         
         # Loss and optimizer
-        # Use precision-focused loss for high-quality trading signals
         label_smoothing = train_config.get('label_smoothing', 0.0)
-        loss_type = train_config.get('loss_type', 'cross_entropy')
-        
-        if loss_type in ['precision_focused', 'asymmetric', 'confidence_weighted', 'precision_recall']:
-            # Use precision-focused loss functions
-            criterion = create_precision_loss(
-                loss_type=loss_type,
-                precision_weight=train_config.get('precision_weight', 5.0),
-                false_positive_penalty=train_config.get('false_positive_penalty', 10.0),
-                buy_penalty=train_config.get('buy_penalty', 10.0),
-                no_buy_penalty=train_config.get('no_buy_penalty', 1.0),
-                confidence_threshold=train_config.get('confidence_threshold', 0.7),
-                high_confidence_penalty=train_config.get('high_confidence_penalty', 3.0),
-                beta=train_config.get('beta', 0.5)
-            )
-            logger.info(f"  Using precision-focused loss: {loss_type}")
-        elif loss_type == 'soft_ordinal':
-            sigma = train_config.get('ordinal_sigma', 5.0)
-            criterion = create_ordinal_loss('soft_ordinal', num_classes=256, sigma=sigma, label_smoothing=label_smoothing)
-            logger.info(f"  Using Soft Ordinal CE Loss (sigma={sigma}, label_smoothing={label_smoothing})")
-        elif loss_type == 'distance_weighted':
-            alpha = train_config.get('distance_alpha', 0.05)
-            criterion = create_ordinal_loss('distance_weighted', alpha=alpha, label_smoothing=label_smoothing)
-            logger.info(f"  Using Distance Weighted CE Loss (alpha={alpha}, label_smoothing={label_smoothing})")
-        else:
-            criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-            logger.info(f"  Using Standard CE Loss (label_smoothing={label_smoothing})")
+        criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        logger.info(f"  Using Standard CE Loss (label_smoothing={label_smoothing})")
         optimizer = optim.Adam(
             model.parameters(),
             lr=learning_rate,
@@ -187,37 +160,20 @@ class TrainBlock(PipelineBlock):
                 f"precision={avg_precision:.3f}"
             )
             
-            # Early stopping (precision-based for binary classification)
-            if self.config['model'].get('binary_classification', False):
-                # For binary classification, stop when precision stops improving
-                if avg_precision > best_val_loss:  # Reuse best_val_loss to track best precision
-                    best_val_loss = avg_precision
-                    best_val_acc = val_acc
-                    best_model_state = model.state_dict().copy()
-                    best_calibrated_threshold_buy = threshold_buy
-                    best_calibrated_threshold_sell = threshold_sell
-                    patience_counter = 0
-                    logger.info(f"    → New best model (precision={best_val_loss:.4f})")
-                else:
-                    patience_counter += 1
-                    if patience_counter >= patience:
-                        logger.info(f"    Early stopping triggered (precision patience={patience})")
-                        break
+            # Early stopping based on validation loss (token prediction)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_val_acc = val_acc
+                best_model_state = model.state_dict().copy()
+                best_calibrated_threshold_buy = threshold_buy
+                best_calibrated_threshold_sell = threshold_sell
+                patience_counter = 0
+                logger.info(f"    → New best model (val_loss={best_val_loss:.4f})")
             else:
-                # Standard validation loss early stopping
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    best_val_acc = val_acc
-                    best_model_state = model.state_dict().copy()
-                    best_calibrated_threshold_buy = threshold_buy
-                    best_calibrated_threshold_sell = threshold_sell
-                    patience_counter = 0
-                    logger.info(f"    → New best model (val_loss={best_val_loss:.4f})")
-                else:
-                    patience_counter += 1
-                    if patience_counter >= patience:
-                        logger.info(f"    Early stopping triggered (patience={patience})")
-                        break
+                patience_counter += 1
+                if patience_counter >= patience:
+                    logger.info(f"    Early stopping triggered (patience={patience})")
+                    break
         
         # Restore best model
         if best_model_state is not None:
@@ -391,38 +347,7 @@ class TrainBlock(PipelineBlock):
             # Enhanced logging with precision focus
             logger.info(f"    Val metrics: loss={avg_loss:.4f}, acc={avg_acc:.4f}, dist_err={avg_distance_error:.2f}")
             
-            # For binary classification, compute precision metrics
-            if self.config['model'].get('binary_classification', False):
-                all_targets_flat = np.concatenate(all_targets)
-                all_predictions_flat = np.concatenate(all_predictions)
-                all_probs_flat = np.concatenate(all_probs)
-                
-                # Compute precision for BUY signals (class 1)
-                buy_mask = all_predictions_flat == 1
-                if buy_mask.sum() > 0:
-                    buy_precision = (all_targets_flat[buy_mask] == 1).mean()
-                    buy_recall = (all_targets_flat == 1).sum() / len(all_targets_flat)
-                    buy_f1 = 2 * buy_precision * buy_recall / (buy_precision + buy_recall + 1e-8)
-                    
-                    # Confidence analysis for BUY predictions
-                    buy_confidences = all_probs_flat[buy_mask, 1]  # BUY class probabilities
-                    avg_buy_confidence = buy_confidences.mean()
-                    
-                    logger.info(f"    BUY precision: {buy_precision:.3f}, BUY recall: {buy_recall:.3f}, BUY F1: {buy_f1:.3f}")
-                    logger.info(f"    BUY avg confidence: {avg_buy_confidence:.3f}, BUY signals: {buy_mask.sum()}")
-                    
-                    # Track high-confidence BUY precision
-                    high_conf_mask = buy_confidences > 0.8
-                    if high_conf_mask.sum() > 0:
-                        high_conf_precision = (all_targets_flat[buy_mask][high_conf_mask] == 1).mean()
-                        logger.info(f"    High-conf BUY precision (>0.8): {high_conf_precision:.3f} ({high_conf_mask.sum()} signals)")
-                else:
-                    logger.info(f"    No BUY signals generated")
-                    buy_precision = 0.0
-                
-                return avg_loss, avg_acc, buy_precision, 0.5, 0.5
-            else:
-                return avg_loss, avg_acc, avg_acc, 0.5, 0.5
+            return avg_loss, avg_acc, avg_acc, 0.5, 0.5
     
     def _compute_directional_targets(self) -> Tuple[np.ndarray, np.ndarray]:
         """

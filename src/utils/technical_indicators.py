@@ -366,7 +366,7 @@ def calculate_volatility_regime(close: pd.Series, period: int = 20) -> pd.Series
     return vol_percentile.fillna(0.5)
 
 
-def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def add_technical_indicators(df: pd.DataFrame, config: dict = None) -> pd.DataFrame:
     """
     Add comprehensive technical indicators to dataframe with multi-coin support
     
@@ -380,10 +380,12 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     
     Args:
         df: DataFrame with OHLCV data
+        config: Configuration dictionary with indicator parameters
         
     Returns:
         DataFrame with added technical indicators
     """
+    config = config or {}
     logger.info("Adding comprehensive technical indicators...")
     
     df = df.copy()
@@ -469,16 +471,18 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def normalize_indicators_for_tokenization(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
+def normalize_indicators_for_tokenization(df: pd.DataFrame, config: dict = None) -> Tuple[pd.DataFrame, dict]:
     """
     Normalize technical indicators to similar ranges as price/volume for tokenization
     
     Args:
         df: DataFrame with indicators
+        config: Configuration dictionary with normalization parameters
         
     Returns:
         Tuple of (normalized_df, normalization_params)
     """
+    config = config or {}
     df = df.copy()
     norm_params = {}
     

@@ -277,54 +277,14 @@ class SequenceBlock(PipelineBlock):
         # Single horizon array: (num_samples,)
         y_single = y_1h
         
-        # Convert 256-bin targets to 3-class (SELL, HOLD, BUY) labels
-        num_classes = self.config['model'].get('num_classes', 256)
-        binary_classification = self.config['model'].get('binary_classification', False)
+        # Use raw token as target (256-class token prediction)
+        y = y_1h
         
-        if binary_classification:
-            # Binary classification: DIRECTIONAL - BUY if price goes UP, NO-BUY if flat/down
-            y_binary = np.zeros_like(y_single, dtype=np.int64)
-            y_binary[y_1h > y_current] = 1  # BUY: future price > current price
-            y_binary[y_1h <= y_current] = 0  # NO-BUY: future price <= current price
-            y = y_binary
-            
-            # Log binary class distribution
-            class_counts = np.bincount(y.flatten())
-            total_samples = y.size
-            buy_count = class_counts[1] if len(class_counts) > 1 else 0
-            no_buy_count = class_counts[0] if len(class_counts) > 0 else 0
-            logger.info(f"    {prediction_horizon}h horizon - Binary distribution:")
-            logger.info(f"      Class 0 (NO-BUY): {no_buy_count:,} ({100*no_buy_count/total_samples:.1f}%)")
-            logger.info(f"      Class 1 (BUY): {buy_count:,} ({100*buy_count/total_samples:.1f}%)")
-        elif num_classes == 3:
-            # 3-class DIRECTIONAL classification (no magnitude threshold): SELL, HOLD, BUY
-            # Use token difference sign as a proxy for raw price direction
-            token_diff = y_1h.astype(np.float32) - y_current.astype(np.float32)
-            
-            # Class 0 (SELL): future token < current token
-            # Class 1 (HOLD): future token == current token
-            # Class 2 (BUY):  future token > current token
-            y_3class = np.ones_like(y_single, dtype=np.int64)  # HOLD by default
-            y_3class[token_diff < 0] = 0
-            y_3class[token_diff > 0] = 2
-            y = y_3class
-            
-            # Log class distribution
-            class_counts = np.bincount(y.flatten())
-            total_samples = y.size
-            logger.info(f"    {prediction_horizon}h horizon - 3-class directional (no threshold) distribution:")
-            logger.info(f"      Class 0 (SELL): {class_counts[0]:,} ({100*class_counts[0]/total_samples:.1f}%)")
-            logger.info(f"      Class 1 (HOLD): {class_counts[1]:,} ({100*class_counts[1]/total_samples:.1f}%)")
-            logger.info(f"      Class 2 (BUY): {class_counts[2]:,} ({100*class_counts[2]/total_samples:.1f}%)")
-        else:
-            # Use raw token as target (256-class token prediction)
-            y = y_1h
-            
-            # Log token distribution
-            logger.info(f"    {prediction_horizon}h horizon - 256-class token prediction:")
-            logger.info(f"      Min token: {y.min()}, Max token: {y.max()}, Mean token: {y.astype(np.float32).mean():.1f}")
-            unique_tokens = len(np.unique(y))
-            logger.info(f"      Unique tokens in targets: {unique_tokens}/256")
+        # Log token distribution
+        logger.info(f"    {prediction_horizon}h horizon - 256-class token prediction:")
+        logger.info(f"      Min token: {y.min()}, Max token: {y.max()}, Mean token: {y.astype(np.float32).mean():.1f}")
+        unique_tokens = len(np.unique(y))
+        logger.info(f"      Unique tokens in targets: {unique_tokens}/256")
         
         # Verify no NaNs
         if np.isnan(X).any() or np.isnan(y).any():

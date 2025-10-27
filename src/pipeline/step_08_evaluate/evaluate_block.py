@@ -117,8 +117,8 @@ class EvaluateBlock(PipelineBlock):
         # Baseline comparisons
         baseline_results = self._compute_baselines(val_X.numpy(), val_y.numpy())
         logger.info("\n  Baseline comparisons:")
-        logger.info(f"    Random (33.3%): {baseline_results['random']:.4f}")
-        logger.info(f"    Persistence: {baseline_results['persistence']:.4f}")
+        logger.info(f"    Random: {baseline_results['random']:.4f}")
+        logger.info(f"    Persistence (token 127): {baseline_results['persistence']:.4f}")
         logger.info(f"    Model: {np.mean(per_hour_acc):.4f}")
         
         # Save results
@@ -189,7 +189,7 @@ class EvaluateBlock(PipelineBlock):
         return artifact
     
     def _predict_batch(self, model, X, device, batch_size=256):
-        """Generate predictions in batches (3-class: SELL/HOLD/BUY)"""
+        """Generate predictions in batches (256-class token prediction)"""
         predictions = []
         
         with torch.no_grad():
@@ -199,44 +199,43 @@ class EvaluateBlock(PipelineBlock):
                 
                 # Extract class predictions
                 if isinstance(outputs, dict) and 'horizon_1h' in outputs:
-                    logits = outputs['horizon_1h']['logits']  # (B, num_classes)
+                    logits = outputs['horizon_1h']['logits']  # (B, 256)
                 else:
-                    logits = outputs  # (B, num_classes)
+                    logits = outputs  # (B, 256)
                 
-                # Get class predictions (0=SELL, 1=HOLD, 2=BUY)
+                # Get token predictions (argmax over 256 classes)
                 preds = torch.argmax(logits, dim=-1).cpu().numpy()  # (B,)
                 predictions.append(preds)
         
         return np.concatenate(predictions, axis=0)
     
     def _compute_per_hour_accuracy(self, predictions, targets):
-        """Compute accuracy for 3-class classification"""
-        # For single-horizon 3-class, both predictions and targets are (N,)
+        """Compute accuracy for 256-class token prediction"""
+        # For single-horizon 256-class, both predictions and targets are (N,)
         correct = (predictions == targets).sum()
         acc = correct / len(predictions)
         return [float(acc)]  # Return as list for compatibility
     
     def _compute_sequence_accuracy(self, predictions, targets):
-        """Compute accuracy for 3-class classification (single horizon)"""
+        """Compute accuracy for 256-class token prediction (single horizon)"""
         # For single-horizon, same as per-hour accuracy
         correct = (predictions == targets).sum()
         acc = correct / len(predictions)
         return float(acc)
     
     def _compute_baselines(self, X, y):
-        """Compute baseline predictions for 3-class classification
+        """Compute baseline predictions for 256-class token prediction
         
         Args:
             X: Input tensor (N, input_length, num_coins, num_channels)
-            y: Target tensor (N,) for 3-class classification (0=SELL, 1=HOLD, 2=BUY)
+            y: Target tensor (N,) for 256-class token prediction
         """
-        # Random baseline (33.3% chance of each class)
-        random_preds = np.random.randint(0, 3, size=y.shape)
+        # Random baseline: predict random token 0-255
+        random_preds = np.random.randint(0, 256, size=y.shape)
         random_acc = (random_preds == y).mean()
         
-        # Persistence baseline: always predict HOLD (1)
-        # This is typically the most common class in directional classification
-        persistence_preds = np.ones_like(y)
+        # Persistence baseline: always predict middle token (127 = no change)
+        persistence_preds = np.full_like(y, 127)
         persistence_acc = (persistence_preds == y).mean()
         
         return {
@@ -245,24 +244,24 @@ class EvaluateBlock(PipelineBlock):
         }
     
     def _save_confusion_matrices(self, predictions, targets, output_dir):
-        """Save confusion matrix for 3-class classification"""
-        # Compute confusion matrix (3x3: SELL/HOLD/BUY)
-        cm = np.zeros((3, 3), dtype=int)
-        for true_label in range(3):
-            for pred_label in range(3):
-                cm[true_label, pred_label] = ((targets == true_label) & (predictions == pred_label)).sum()
+        """Save confusion matrix for 256-class token prediction (downsampled)"""
+        # For 256x256 matrix, just save basic statistics
+        correct = (predictions == targets).sum()
+        accuracy = correct / len(predictions)
         
-        # Plot
-        fig, ax = plt.subplots(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
-                   xticklabels=['SELL', 'HOLD', 'BUY'],
-                   yticklabels=['SELL', 'HOLD', 'BUY'])
-        ax.set_xlabel('Predicted')
-        ax.set_ylabel('True')
-        ax.set_title('Confusion Matrix - 3-Class Directional Classification')
+        # Create a simple accuracy visualization
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(0.5, 0.6, f'Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)', 
+                ha='center', va='center', fontsize=20, fontweight='bold')
+        ax.text(0.5, 0.4, f'Total samples: {len(predictions):,}', 
+                ha='center', va='center', fontsize=14)
+        ax.text(0.5, 0.3, f'Correct predictions: {correct:,}', 
+                ha='center', va='center', fontsize=14)
+        ax.axis('off')
+        ax.set_title('Token Prediction Accuracy (256-class)', fontsize=16, fontweight='bold')
         
         plt.tight_layout()
-        plt.savefig(output_dir / "cm_3class.png", dpi=100, bbox_inches='tight')
+        plt.savefig(output_dir / "token_accuracy.png", dpi=100, bbox_inches='tight')
         plt.close()
     
     def _plot_per_hour_accuracy(self, per_hour_acc, output_path):
@@ -271,7 +270,7 @@ class EvaluateBlock(PipelineBlock):
         
         hours = list(range(1, len(per_hour_acc) + 1))
         ax.plot(hours, per_hour_acc, marker='o', linewidth=2, markersize=8)
-        ax.axhline(y=0.333, color='r', linestyle='--', label='Random baseline (33.3%)')
+        ax.axhline(y=0.5, color='r', linestyle='--', label='Random baseline (50%)')
         
         ax.set_xlabel('Prediction Hour', fontsize=12)
         ax.set_ylabel('Accuracy', fontsize=12)

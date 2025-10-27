@@ -42,25 +42,9 @@ def test_early_stopping():
     assert True, "Early stopping test placeholder"
 
 
-def test_token_predictor_initialization():
+def test_token_predictor_initialization(config):
     """Test CryptoTransformerV4 model creation"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
     
     # Test model was created
     assert model is not None
@@ -70,25 +54,9 @@ def test_token_predictor_initialization():
     assert model.d_model == 128
 
 
-def test_token_predictor_forward_pass():
+def test_token_predictor_forward_pass(config):
     """Test CryptoTransformerV4 forward pass"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     batch_size = 4
     seq_len = 24
@@ -110,25 +78,9 @@ def test_token_predictor_forward_pass():
     assert horizon_1h.shape == (batch_size, 3), f"Expected ({batch_size}, 3), got {horizon_1h.shape}"
 
 
-def test_token_predictor_inference():
+def test_token_predictor_inference(config):
     """Test CryptoTransformerV4 inference mode"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     model.eval()
 
@@ -153,25 +105,9 @@ def test_token_predictor_inference():
     assert horizon_1h.shape == (batch_size, 3), f"Expected ({batch_size}, 3), got {horizon_1h.shape}"
 
 
-def test_token_predictor_generate():
+def test_token_predictor_generate(config):
     """Test CryptoTransformerV4 generation capabilities"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     model.eval()
 
@@ -201,25 +137,25 @@ def test_token_predictor_generate():
     assert predictions.shape == (batch_size,), f"Expected ({batch_size},), got {predictions.shape}"
 
 
-def test_token_predictor_dimensions():
+def test_token_predictor_dimensions(config):
     """Test CryptoTransformerV4 with different dimensions"""
-    model = CryptoTransformerV4(
-        vocab_size=5,
-        num_classes=5,
-        num_coins=4,
-        d_model=64,
-        nhead=2,
-        num_encoder_layers=1,
-        num_decoder_layers=1,
-        dim_feedforward=128,
-        dropout=0.0,
-        coin_embedding_dim=8,
-        max_seq_len=512,
-        target_coin_idx=3,  # Last coin
-        btc_coin_idx=0,  # First coin
-        binary_classification=False,
-        num_channels=9
-    )
+    # Create modified config for this test
+    modified_config = config.copy()
+    modified_config['model'].update({
+        'vocab_size': 5,
+        'num_classes': 5,
+        'd_model': 64,
+        'nhead': 2,
+        'num_encoder_layers': 1,
+        'num_decoder_layers': 1,
+        'dim_feedforward': 128,
+        'dropout': 0.0,
+        'coin_embedding_dim': 8,
+        'max_seq_len': 512
+    })
+    modified_config['data']['coins'] = ['BTC', 'ETH', 'LTC', 'XRP']
+    
+    model = CryptoTransformerV4(modified_config)
 
     batch_size = 2
     seq_len = 12
@@ -241,28 +177,12 @@ def test_token_predictor_dimensions():
     assert horizon_1h.shape == (batch_size, 5), f"Expected ({batch_size}, 5), got {horizon_1h.shape}"
 
 
-def test_token_predictor_invalid_dimensions():
+def test_token_predictor_invalid_dimensions(config):
     """Test CryptoTransformerV4 handles invalid dimensions gracefully"""
     # Test with invalid coin count
+    model = CryptoTransformerV4(config)
+    
     with pytest.raises(AssertionError):
-        model = CryptoTransformerV4(
-            vocab_size=3,
-            num_classes=3,
-            num_coins=3,  # Model expects 3 coins
-            d_model=128,
-            nhead=4,
-            num_encoder_layers=2,
-            num_decoder_layers=2,
-            dim_feedforward=256,
-            dropout=0.1,
-            coin_embedding_dim=16,
-            max_seq_len=1024,
-            target_coin_idx=2,
-            btc_coin_idx=0,
-            binary_classification=False,
-            num_channels=9
-        )
-        
         # Try to pass input with wrong number of coins
         x = torch.randint(0, 3, (1, 24, 5, 9))  # 5 coins instead of 3
         model(x)

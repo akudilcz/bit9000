@@ -35,10 +35,10 @@ class AugmentBlock(PipelineBlock):
 
         # Add technical indicators to both train and val
         logger.info("Adding technical indicators to training data...")
-        train_augmented = add_technical_indicators(train_df)
+        train_augmented = add_technical_indicators(train_df, config=self.config)
 
         logger.info("Adding technical indicators to validation data...")
-        val_augmented = add_technical_indicators(val_df)
+        val_augmented = add_technical_indicators(val_df, config=self.config)
 
         # Verify we added the expected number of channels
         original_cols = len([c for c in train_df.columns if c.endswith('_close')])

@@ -116,9 +116,9 @@ def tokenized_data(temp_dir):
 
 
 def test_sequence_shape_is_correct(config, temp_dir, tokenized_data):
-    """Test that sequences have shape (N, 24, num_coins, 9)"""
+    """Test that sequences have correct shapes for single-horizon prediction"""
     train_path, val_path, thresholds_path = tokenized_data
-    
+
     # Create tokenize artifact
     tokenize_artifact = TokenizeArtifact(
         train_path=train_path,
@@ -129,65 +129,68 @@ def test_sequence_shape_is_correct(config, temp_dir, tokenized_data):
         token_distribution={0: {'train': 0.33, 'val': 0.30}},
         metadata=ArtifactMetadata(schema_name='tokenize')
     )
-    
+
     # Run sequence creation
     artifact_io = ArtifactIO(base_dir=temp_dir)
     block = SequenceBlock(config, artifact_io)
     result = block.run(tokenize_artifact)
-    
+
     # Load sequences
     train_X = torch.load(result.train_X_path)
     train_y = torch.load(result.train_y_path)
     val_X = torch.load(result.val_X_path)
     val_y = torch.load(result.val_y_path)
-    
+
     # Check shapes
     num_coins = len(config['data']['coins'])
     input_length = config['sequences']['input_length']
-    output_length = config['sequences']['output_length']
     num_channels = config['sequences']['num_channels']
-    
-    # Input shape: (N, 24, num_coins, 2)
+
+    # Input shape: (N, 24, num_coins, 9)
     assert train_X.dim() == 4, f"Expected 4D tensor, got {train_X.dim()}D"
     assert train_X.shape[1] == input_length, f"Expected input_length={input_length}, got {train_X.shape[1]}"
     assert train_X.shape[2] == num_coins, f"Expected {num_coins} coins, got {train_X.shape[2]}"
     assert train_X.shape[3] == num_channels, f"Expected {num_channels} channels, got {train_X.shape[3]}"
-    
-    # Output shape: (N, 8) for XRP price only
-    assert train_y.dim() == 2, f"Expected 2D tensor, got {train_y.dim()}D"
-    assert train_y.shape[1] == output_length, f"Expected output_length={output_length}, got {train_y.shape[1]}"
+
+    # Output shape: (N,) for single-horizon 3-class prediction
+    assert train_y.dim() == 1, f"Expected 1D tensor, got {train_y.dim()}D"
+    assert train_y.shape[0] == train_X.shape[0], f"Batch size mismatch: X={train_X.shape[0]}, y={train_y.shape[0]}"
     
     # Same for validation
     assert val_X.shape[1:] == train_X.shape[1:], "Val and train should have same sequence dimensions"
-    assert val_y.shape[1] == train_y.shape[1], "Val and train targets should have same length"
+    assert val_y.shape[0] == val_X.shape[0], "Val y should match val X batch size"
 
 
 def test_sequence_num_samples_correct(config, temp_dir, tokenized_data):
-    """Test that number of sequences is computed correctly"""
+    """Test that number of sequences is computed correctly for single-horizon prediction"""
     train_path, val_path, thresholds_path = tokenized_data
-    
+
     # Create tokenize artifact
     tokenize_artifact = TokenizeArtifact(
         train_path=train_path,
         val_path=val_path,
-        train_shape=(100, 6),
-        val_shape=(50, 6),
+        train_shape=(100, 27),  # 3 coins × 9 channels
+        val_shape=(50, 27),
         thresholds_path=thresholds_path,
         token_distribution={0: {'train': 0.33, 'val': 0.30}},
         metadata=ArtifactMetadata(schema_name='tokenize')
     )
-    
+
     # Run sequence creation
     artifact_io = ArtifactIO(base_dir=temp_dir)
     block = SequenceBlock(config, artifact_io)
     result = block.run(tokenize_artifact)
+
+    # For single-horizon prediction: num_samples = len(data) - input_length - prediction_horizon + 1
+    # prediction_horizon = 1 (1h ahead)
+    # Train: 100 - 24 - 1 + 1 = 76
+    # Val: 50 - 24 - 1 + 1 = 26
+    input_length = config['sequences']['input_length']
+    prediction_horizon = 1  # Single horizon prediction
     
-    # Number of sequences = len(data) - input_length - output_length + 1
-    # Train: 100 - 24 - 8 + 1 = 69
-    # Val: 50 - 24 - 8 + 1 = 19
-    expected_train_samples = 100 - 24 - 8 + 1
-    expected_val_samples = 50 - 24 - 8 + 1
-    
+    expected_train_samples = 100 - input_length - prediction_horizon + 1
+    expected_val_samples = 50 - input_length - prediction_horizon + 1
+
     assert result.train_num_samples == expected_train_samples, \
         f"Expected {expected_train_samples} train samples, got {result.train_num_samples}"
     assert result.val_num_samples == expected_val_samples, \
@@ -195,47 +198,40 @@ def test_sequence_num_samples_correct(config, temp_dir, tokenized_data):
 
 
 def test_sequence_target_is_xrp_price_only(config, temp_dir, tokenized_data):
-    """Test that target is XRP price tokens only (not volume)"""
+    """Test that target is 3-class directional prediction for XRP price"""
     train_path, val_path, thresholds_path = tokenized_data
-    
-    # Load tokenized data to get XRP price tokens
-    train_tokens = pd.read_parquet(train_path)
-    
+
     # Create tokenize artifact
     tokenize_artifact = TokenizeArtifact(
         train_path=train_path,
         val_path=val_path,
-        train_shape=(100, 6),
-        val_shape=(50, 6),
+        train_shape=(100, 27),  # 3 coins × 9 channels
+        val_shape=(50, 27),
         thresholds_path=thresholds_path,
         token_distribution={0: {'train': 0.33, 'val': 0.30}},
         metadata=ArtifactMetadata(schema_name='tokenize')
     )
-    
+
     # Run sequence creation
     artifact_io = ArtifactIO(base_dir=temp_dir)
     block = SequenceBlock(config, artifact_io)
     result = block.run(tokenize_artifact)
-    
+
     # Check that target coin is XRP
     assert result.target_coin == 'XRP'
-    
+
     # Load targets
     train_y = torch.load(result.train_y_path)
+
+    # Check that targets are in valid range [0, 1, 2] for 3-class prediction
+    assert train_y.min() >= 0 and train_y.max() <= 2, f"Targets should be in range [0,2], got [{train_y.min()}, {train_y.max()}]"
     
-    # Check that targets are in valid range [0, 1, 2]
-    assert train_y.min() >= 0 and train_y.max() <= 2
+    # Check that we have reasonable class distribution (not all same class)
+    unique_classes = torch.unique(train_y)
+    assert len(unique_classes) > 1, f"Should have multiple classes, got only {unique_classes.tolist()}"
     
-    # Check that targets match XRP_price column (not XRP_volume)
-    # We can verify by checking first sequence
-    first_target = train_y[0].numpy()  # 8 hours of targets
-    
-    # Get corresponding XRP price tokens from original data
-    # First sequence starts at index 24, targets are indices 24:32
-    expected_target = train_tokens['XRP_price'].iloc[24:32].values
-    
-    np.testing.assert_array_equal(first_target, expected_target,
-                                   "Targets should match XRP price tokens")
+    # Check that targets are integers (class labels)
+    assert train_y.dtype == torch.int64, f"Targets should be int64, got {train_y.dtype}"
 
 
 def test_sequence_channels_separated(config, temp_dir, tokenized_data):

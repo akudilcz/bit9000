@@ -101,6 +101,10 @@ training:
     patience: 30
     min_delta: 0.0001
   
+  # Walk-forward validation
+  walk_forward:
+    val_split_hours: 4320  # 6 months for validation
+  
   # Loss function (precision-focused)
   loss_type: asymmetric
   buy_penalty: 10.0

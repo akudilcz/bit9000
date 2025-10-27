@@ -10,7 +10,8 @@ def config():
     """Test configuration matching updated design"""
     return {
         'data': {
-            'coins': ['BTC', 'ETH', 'XRP']
+            'coins': ['BTC', 'ETH', 'XRP'],
+            'target_coin': 'XRP'
         },
         'sequences': {
             'input_length': 24,
@@ -38,23 +39,7 @@ def config():
 
 def test_model_accepts_correct_input_shape(config):
     """Test that model accepts input shape (batch, 24, num_coins, 9)"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     batch_size = 16
     input_length = 24
@@ -76,23 +61,7 @@ def test_model_accepts_correct_input_shape(config):
 
 def test_model_output_shape(config):
     """Test that model output shape is correct for multi-horizon predictions"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     batch_size = 16
     input_length = 24
@@ -117,23 +86,7 @@ def test_model_output_shape(config):
 
 def test_model_handles_different_batch_sizes(config):
     """Test that model works with different batch sizes"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     input_length = 24
     num_coins = 3
@@ -154,23 +107,7 @@ def test_model_handles_different_batch_sizes(config):
 
 def test_model_outputs_valid_logits(config):
     """Test that model outputs are valid logits (not probabilities)"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     batch_size = 16
     input_length = 24
@@ -194,23 +131,7 @@ def test_model_outputs_valid_logits(config):
 
 def test_model_parameters_count_reasonable(config):
     """Test that model has reasonable number of parameters"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     total_params = sum(p.numel() for p in model.parameters())
     
@@ -220,23 +141,7 @@ def test_model_parameters_count_reasonable(config):
 
 def test_model_embedding_dimensions(config):
     """Test that model has correct embedding structure"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     # Model should have coin embedding
     assert hasattr(model, 'coin_embedding'), "Model should have coin embedding"
@@ -253,23 +158,7 @@ def test_model_embedding_dimensions(config):
 
 def test_model_eval_mode(config):
     """Test that model can be set to eval mode"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
 
     # Set to eval mode
     model.eval()
@@ -291,23 +180,7 @@ def test_model_eval_mode(config):
 
 def test_model_training_mode(config):
     """Test that model can be set to training mode"""
-    model = CryptoTransformerV4(
-        vocab_size=3,
-        num_classes=3,
-        num_coins=3,
-        d_model=128,
-        nhead=4,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        dim_feedforward=256,
-        dropout=0.1,
-        coin_embedding_dim=16,
-        max_seq_len=1024,
-        target_coin_idx=2,  # XRP
-        btc_coin_idx=0,  # BTC
-        binary_classification=False,
-        num_channels=9
-    )
+    model = CryptoTransformerV4(config)
     
     model.train()
     assert model.training, "Model should be in training mode"

@@ -74,10 +74,10 @@ class EarlySplitBlock(PipelineBlock):
             val_path=val_path,
             train_samples=len(train_df),
             val_samples=len(val_df),
-            train_start_date=train_df.index[0],
-            train_end_date=train_df.index[-1],
-            val_start_date=val_df.index[0],
-            val_end_date=val_df.index[-1],
+            train_start_date=train_df['timestamp'].iloc[0],
+            train_end_date=train_df['timestamp'].iloc[-1],
+            val_start_date=val_df['timestamp'].iloc[0],
+            val_end_date=val_df['timestamp'].iloc[-1],
             metadata=self.create_metadata(
                 upstream_inputs={"clean_data": str(clean_artifact.path)}
             )

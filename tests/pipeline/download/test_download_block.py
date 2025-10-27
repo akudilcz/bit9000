@@ -33,7 +33,7 @@ def test_download_block_creates_artifacts(monkeypatch, test_config, artifact_io)
     )
 
     block = DownloadBlock(test_config, artifact_io)
-    artifact = block.run(start_date="2024-01-01", end_date="2024-01-02")
+    artifact = block.run()
 
     # Validate artifact fields
     assert artifact.num_timesteps == 5

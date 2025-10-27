@@ -16,23 +16,20 @@ logger = get_logger(__name__)
 class DownloadBlock(PipelineBlock):
     """Download raw cryptocurrency data"""
     
-    def run(
-        self,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None
-    ) -> RawDataArtifact:
+    def run(self) -> RawDataArtifact:
         """
-        Download raw data
-        
-        Args:
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
-            
+        Download raw data using config parameters
+
         Returns:
             RawDataArtifact
         """
+        # Extract parameters from config
+        data_config = self.config.get('data', {})
+        start_date = data_config.get('default_start_date')
+        end_date = data_config.get('default_end_date')
+
         logger.info(f"Running download block: {start_date} to {end_date}")
-        
+
         # Use existing DataCollector
         collector = DataCollector(self.config)
         

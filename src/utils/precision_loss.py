@@ -15,16 +15,13 @@ class PrecisionFocusedLoss(nn.Module):
     
     For trading signals, false positives (wrong BUY signals) are much more costly
     than false negatives (missed opportunities). This loss function addresses that.
-    
-    Args:
-        precision_weight: How much to weight precision vs recall (higher = more precision-focused)
-        false_positive_penalty: Additional penalty multiplier for false positives
     """
     
-    def __init__(self, precision_weight: float = 3.0, false_positive_penalty: float = 5.0):
+    def __init__(self, config: dict = None):
         super().__init__()
-        self.precision_weight = precision_weight
-        self.false_positive_penalty = false_positive_penalty
+        config = config or {}
+        self.precision_weight = config.get('precision_weight', 3.0)
+        self.false_positive_penalty = config.get('false_positive_penalty', 5.0)
     
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -68,10 +65,11 @@ class AsymmetricPrecisionLoss(nn.Module):
     - NO-BUY predictions: Lower penalty for wrong calls (allow more false negatives)
     """
     
-    def __init__(self, buy_penalty: float = 10.0, no_buy_penalty: float = 1.0):
+    def __init__(self, config: dict = None):
         super().__init__()
-        self.buy_penalty = buy_penalty
-        self.no_buy_penalty = no_buy_penalty
+        config = config or {}
+        self.buy_penalty = config.get('buy_penalty', 10.0)
+        self.no_buy_penalty = config.get('no_buy_penalty', 1.0)
     
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -105,10 +103,11 @@ class ConfidenceWeightedLoss(nn.Module):
     encouraging the model to be more conservative with high-confidence calls.
     """
     
-    def __init__(self, confidence_threshold: float = 0.7, high_confidence_penalty: float = 3.0):
+    def __init__(self, config: dict = None):
         super().__init__()
-        self.confidence_threshold = confidence_threshold
-        self.high_confidence_penalty = high_confidence_penalty
+        config = config or {}
+        self.confidence_threshold = config.get('confidence_threshold', 0.7)
+        self.high_confidence_penalty = config.get('high_confidence_penalty', 3.0)
     
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -146,9 +145,10 @@ class PrecisionRecallLoss(nn.Module):
     Uses F-beta score with beta < 1 to emphasize precision over recall.
     """
     
-    def __init__(self, beta: float = 0.5):  # beta < 1 emphasizes precision
+    def __init__(self, config: dict = None):
         super().__init__()
-        self.beta = beta
+        config = config or {}
+        self.beta = config.get('beta', 0.5)  # beta < 1 emphasizes precision
     
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -181,24 +181,26 @@ class PrecisionRecallLoss(nn.Module):
         return -f_beta
 
 
-def create_precision_loss(loss_type: str = 'precision_focused', **kwargs):
+def create_precision_loss(loss_type: str = 'asymmetric', config: dict = None):
     """
     Factory function to create precision-focused loss functions.
     
     Args:
         loss_type: 'precision_focused', 'asymmetric', 'confidence_weighted', 'precision_recall'
-        **kwargs: Loss-specific parameters
+        config: Configuration dictionary with loss-specific parameters
     
     Returns:
         Loss module optimized for precision
     """
+    config = config or {}
+    
     if loss_type == 'precision_focused':
-        return PrecisionFocusedLoss(**kwargs)
+        return PrecisionFocusedLoss(config)
     elif loss_type == 'asymmetric':
-        return AsymmetricPrecisionLoss(**kwargs)
+        return AsymmetricPrecisionLoss(config)
     elif loss_type == 'confidence_weighted':
-        return ConfidenceWeightedLoss(**kwargs)
+        return ConfidenceWeightedLoss(config)
     elif loss_type == 'precision_recall':
-        return PrecisionRecallLoss(**kwargs)
+        return PrecisionRecallLoss(config)
     else:
         raise ValueError(f"Unknown precision loss type: {loss_type}")
